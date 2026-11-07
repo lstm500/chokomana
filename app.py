@@ -11,15 +11,15 @@ for Supabase REST requests (no supabase-py dependency).
 Required Streamlit Secrets:
   SUPABASE_URL = "https://keewulninyoeylgflshb.supabase.co"
   SUPABASE_SERVICE_ROLE_KEY = "<server-side key>"  # OR SUPABASE_SECRET_KEY
-  CHOCOMANA_PROFILE_ID = "<same exact learner ID as every study app>"
+  SUPABASE_PUBLISHABLE_KEY = "<optional, public key; built-in default>"
 
 Optional Streamlit Secrets:
   KOTOBA_APP_URL = "https://...streamlit.app"
   SOROBAN_APP_URL = "https://...streamlit.app"
   GEOMETRY_APP_URL = "https://...streamlit.app"
 
-Security: service/secret key stays in Streamlit's Python process. Protect this
-hub's Streamlit deployment with private access if it contains children's data.
+Security: guest reads are protected by RLS, launch tickets are one-time,
+service/secret keys are kept only in the Python server process.
 """
 from __future__ import annotations
 
@@ -80,37 +80,34 @@ def _valid_https_url(value: str) -> bool:
 
 
 def _db_config() -> tuple[str, str, str, list[str]]:
+    """Return the logged-in guest identity and its JWT for RLS-backed reads."""
     url = _setting("SUPABASE_URL", DEFAULT_SUPABASE_URL).rstrip("/")
-    key = _setting("SUPABASE_SERVICE_ROLE_KEY") or _setting("SUPABASE_SECRET_KEY")
-    profile = _setting("CHOCOMANA_PROFILE_ID")
+    key = _setting("SUPABASE_PUBLISHABLE_KEY", CM_PUBLIC_KEY)
+    profile = st.session_state.get("cm_profile", "")
+    token = st.session_state.get("cm_access_token", "")
     missing = []
     if not _valid_https_url(url):
-        missing.append("SUPABASE_URL（HTTPSのProject URL）")
-    if not key:
-        missing.append("SUPABASE_SERVICE_ROLE_KEY または SUPABASE_SECRET_KEY")
-    if not profile:
-        missing.append("CHOCOMANA_PROFILE_ID")
+        missing.append("SUPABASE_URL")
+    if not token or not profile:
+        missing.append("匿名セッション")
     return url, key, profile, missing
 
 
-def fetch_day(url: str, secret_key: str, profile_id: str, target_day: date) -> tuple[list[dict], bool]:
+def fetch_day(url: str, public_key: str, profile_id: str, target_day: date, access_token: str = "") -> tuple[list[dict], bool]:
     """Fetch only one learner/day, with server-only authentication and paging.
 
     study_date is a generated JST date in PostgreSQL. No new rows are written.
     """
-    if not _valid_https_url(url) or not secret_key or not profile_id:
+    if not _valid_https_url(url) or not public_key or not profile_id or not access_token:
         raise ValueError("Supabase接続設定または学習者IDがありません")
     rows = []
     base = url.rstrip("/") + "/rest/v1/" + TABLE_NAME
     headers = {
-        "apikey": secret_key,
+        "apikey": public_key,
+        "Authorization": "Bearer " + access_token,
         "Accept": "application/json",
-        "User-Agent": "chokomana-hub/1.0",
+        "User-Agent": "chokomana-hub/2.0",
     }
-    # Legacy service_role keys are JWTs. New sb_secret_ keys use the API key
-    # header and must not be passed as non-JWT Bearer tokens.
-    if not secret_key.startswith("sb_secret_"):
-        headers["Authorization"] = "Bearer " + secret_key
 
     offset = 0
     truncated = False
@@ -324,6 +321,60 @@ h1,h2,h3{color:#263a56 !important}
 .cm-pill{background:#eef4fc;color:#315887;border-radius:50px;font-size:12px;font-weight:800;padding:6px 12px}
 [data-testid="stVerticalBlockBorderWrapper"]{border-color:var(--cm-outline)}
 @media(max-width:640px){.cm-stamp-grid{grid-template-columns:repeat(auto-fill,minmax(99px,1fr));gap:15px 5px}.cm-stamp{width:86px;height:86px}.cm-stamp-char{font-size:31px}.cm-hero{padding:21px 17px}}
+
+/* Home refresh: scoped cards retain native Streamlit controls and links. */
+:root{--cm-ink:#233c3c;--cm-muted:#657875;--cm-outline:#e3e9e4}
+.stApp{background:#fafbf7;color:var(--cm-ink)}
+.block-container{max-width:1060px;padding-top:2.4rem}
+h1,h2,h3{color:#233c3c!important}
+.cm-brand{gap:12px;margin-bottom:18px}
+.cm-logo{width:46px;height:46px;border-radius:16px;background:#287466;box-shadow:none;font-size:25px}
+.cm-brand h1{font-size:29px;letter-spacing:.06em;color:#233c3c!important;padding:0;line-height:1.4}
+.cm-brand p{font-size:12px;margin-top:4px}
+[class*="st-key-nav_"] button{border:0!important;background:transparent!important;color:#687975!important;border-radius:12px!important;box-shadow:none!important;min-height:44px}
+[class*="st-key-nav_"] button[kind="primary"]{background:#e5efe8!important;color:#225b4e!important}
+[class*="st-key-nav_"] button p{font-weight:700}
+.cm-hero{position:relative;overflow:hidden;background:#eef4e9;border:1px solid #e1ebdd;border-radius:26px;color:#233c3c;box-shadow:none;padding:30px 32px;margin:20px 0 8px}
+.cm-hero h2{font-size:clamp(24px,4.5vw,34px);color:#233c3c!important;letter-spacing:.04em;line-height:1.5;margin:3px 0 7px}
+.cm-hero p{color:#5c7368;font-size:14px;line-height:1.8}
+.cm-eyebrow{color:#4c7a63;font-size:11px;font-weight:750;letter-spacing:.14em}
+.cm-hero-copy{position:relative;z-index:1;padding-right:140px}
+.cm-hero-art{position:absolute;right:34px;top:24px;width:126px;height:126px;transform:rotate(-8deg);color:#326653}
+.cm-page-heading{color:#233c3c;font-size:20px;margin:22px 0 8px;font-weight:800}
+.cm-section-hint{font-size:12px;font-weight:400;color:#71817a;margin-left:12px}
+[class*="st-key-subject_"]{--subject:#287466;--wash:#e9f1e9}
+.st-key-subject_kotoba{--subject:#b14f43;--wash:#f9ece6}
+.st-key-subject_soroban{--subject:#326dac;--wash:#eaf1fa}
+.st-key-subject_geometry{--subject:#826221;--wash:#f7f0db}
+[class*="st-key-subject_"]{background:white;border:1px solid #e3e8df!important;border-radius:22px!important;padding:20px!important;box-shadow:0 5px 16px #233c3c05}
+.cm-app-art{min-height:182px;margin:0 0 14px;background:transparent;gap:9px}
+.cm-app-art .icon{display:grid;place-items:center;width:84px;height:84px;border-radius:27px;background:var(--wash);color:var(--subject);font-size:36px;margin-bottom:10px;transform:rotate(-5deg)}
+.cm-app-art .icon span{transform:rotate(5deg)}
+.cm-app-art .name{color:#293f3a;font-size:19px}
+.cm-app-art .tag{color:#718078;font-size:12px}
+[class*="st-key-subject_"] [data-testid="stLinkButton"] a{background:var(--wash)!important;color:var(--subject)!important;border:1px solid transparent!important;border-radius:12px;min-height:46px;box-shadow:none;font-weight:750}
+[class*="st-key-subject_"] [data-testid="stLinkButton"] a:hover{border-color:var(--subject)!important;filter:brightness(.98)}
+[class*="st-key-subject_"] [data-testid="stLinkButton"] a:focus-visible{outline:3px solid var(--subject);outline-offset:3px}
+.st-key-home_progress{background:#fff;border:1px solid #e3e8df!important;border-radius:20px!important;padding:20px 24px!important;margin-top:14px}
+.cm-progress-heading{font-size:19px;font-weight:800;color:#233c3c;margin-bottom:6px}
+.cm-progress-heading span{color:#b58c32;margin-right:8px}
+.st-key-home_today button{background:#287466!important;border-color:#287466!important;color:white!important;border-radius:12px;min-height:46px}
+.cm-note{color:#6b7b73;line-height:1.7}
+@media(max-width:640px){
+.block-container{padding:1.5rem 1rem 3rem}
+.cm-brand h1{font-size:25px}
+.cm-brand p{font-size:10px}
+.cm-hero{padding:23px 20px;border-radius:22px}
+.cm-hero-copy{padding-right:0}
+.cm-hero-art{display:none}
+.cm-hero h2{font-size:25px}
+.cm-hero p{font-size:12px}
+.cm-section-hint{display:block;margin:5px 0 0}
+[class*="st-key-subject_"]{padding:16px!important}
+.cm-app-art{min-height:150px}
+.st-key-home_progress{padding:18px!important}
+[class*="st-key-nav_"] button p{font-size:12px}
+}
 </style>
 """
 
@@ -345,13 +396,11 @@ def render_navigation() -> None:
                     _open_today()
                 else:
                     st.session_state.cm_page = page
-                    st.session_state.cm_game = None
                 st.rerun()
 
 
 def _open_today() -> None:
     st.session_state.cm_page = "today"
-    st.session_state.cm_game = None
     st.session_state.cm_today_requested = True
     st.session_state.cm_today_rows = None
     st.session_state.cm_today_error = None
@@ -369,7 +418,7 @@ def _load_today_if_requested(url: str, key: str, profile: str, missing: list[str
         st.session_state.cm_today_rows = None
         return
     try:
-        rows, truncated = fetch_day(url, key, profile, day)
+        rows, truncated = fetch_day(url, key, profile, day, st.session_state.get("cm_access_token", ""))
         st.session_state.cm_today_rows = rows
         st.session_state.cm_today_truncated = truncated
         st.session_state.cm_today_error = None
@@ -378,58 +427,69 @@ def _load_today_if_requested(url: str, key: str, profile: str, missing: list[str
         st.session_state.cm_today_rows = None
 
 
+def _make_launch_link(app: dict) -> str:
+    """Pre-create a short-lived, single-use link for a native new-tab anchor.
+
+    Streamlit button reruns are not reliable browser user gestures for window.open,
+    therefore st.link_button is used instead of JS-driven opening.
+    """
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    key = "cm_link_" + app["id"]
+    cache = st.session_state.get(key)
+    if cache and cache.get("url") == app["url"] and cache.get("profile") == st.session_state.cm_profile:
+        if cache["expiry"] > now + timedelta(seconds=70):
+            return cache["link"]
+    ticket = cm_issue_ticket(st.session_state.cm_profile, app["id"])
+    link = cm_launch_url(app["url"], ticket)
+    st.session_state[key] = {
+        "link": link, "url": app["url"], "profile": st.session_state.cm_profile,
+        "expiry": now + timedelta(seconds=CM_TICKET_SECONDS),
+    }
+    return link
+
+
 def render_home(apps: list[dict]) -> None:
-    st.markdown('<div class="cm-hero"><h2>きょうは なにを まなぶ？</h2>'
-                '<p>すきなきょうかをえらんで、チャレンジしよう。</p></div>',
-                unsafe_allow_html=True)
-    st.markdown('<div class="cm-page-heading">あそべる学習アプリ</div>', unsafe_allow_html=True)
-    cols = st.columns(3, gap="medium")
-    for col, app in zip(cols, apps):
-        with col:
-            with st.container(border=True):
-                block = (f'<div class="cm-app-art"><div class="icon">{html.escape(app["icon"])}</div>'
-                         f'<div class="name">{html.escape(app["title"])}</div>'
-                         f'<div class="tag">{html.escape(app["tag"])}</div></div>')
-                st.markdown(block, unsafe_allow_html=True)
-                if app["ready"]:
-                    if st.button("あそぶ", key="launch_" + app["id"],
-                                 type="primary", use_container_width=True):
-                        st.session_state.cm_game = app["id"]
-                        st.session_state.cm_page = "game"
-                        st.rerun()
-                else:
-                    st.button("まだ準備中", key="disabled_" + app["id"],
-                              disabled=True, use_container_width=True,
-                              help=f'Secretsに {app["secret"]} を設定してください')
-    st.markdown('<div class="cm-page-heading">きょうの がんばり</div>', unsafe_allow_html=True)
-    st.markdown('<div class="cm-note">チャレンジがおわると、各アプリがスタンプを保存します。</div>', unsafe_allow_html=True)
-    if st.button("今日の成果を確認する", key="home_today", type="primary", use_container_width=True):
-        _open_today()
-        st.rerun()
-
-
-def render_game(apps: list[dict]) -> None:
-    app = next((x for x in apps if x["id"] == st.session_state.get("cm_game")), None)
-    if not app or not app["ready"]:
-        st.session_state.cm_page = "home"
-        st.warning("アプリのURLが設定されていません。")
-        return
-    st.markdown(f'<div class="cm-page-heading">{html.escape(app["title"])}</div>', unsafe_allow_html=True)
-    st.markdown('<div class="cm-note">学習アプリは独立して動作します。終わったら「今日の成果」を開いてください。</div>',
-                unsafe_allow_html=True)
-    left, right = st.columns(2, gap="small")
-    with left:
-        if st.button("← ほかの教科を選ぶ", use_container_width=True):
-            st.session_state.cm_page = "home"
-            st.session_state.cm_game = None
+    st.markdown('''<div class="cm-hero"><div class="cm-hero-copy">
+        <div class="cm-eyebrow">ちいさな まなび、まいにち。</div>
+        <h2>きょうは なにを まなぶ？</h2>
+        <p>すきなことから、ひとつずつ。<br>あそんで、まなんで、スタンプをあつめよう。</p></div>
+        <svg class="cm-hero-art" viewBox="0 0 128 128" fill="none" aria-hidden="true">
+        <rect x="15" y="9" width="97" height="110" rx="17" fill="#fffdf7" stroke="#ceddc9" stroke-width="2"/>
+        <path d="M35 32h57M35 43h33" stroke="#d4e1cd" stroke-width="5" stroke-linecap="round"/>
+        <circle cx="64" cy="79" r="25" fill="#f8e7a4" stroke="#d4b754" stroke-width="2" stroke-dasharray="3 3"/>
+        <path d="m64 62 5 11 12 2-9 9 2 12-10-6-11 6 2-12-9-9 13-2z" fill="#b68c2b"/>
+        </svg></div>''', unsafe_allow_html=True)
+    st.markdown('<div class="cm-page-heading">まなびを えらぶ<span class="cm-section-hint">すきなカードから はじめよう</span></div>', unsafe_allow_html=True)
+    # Fragments refresh expiring one-time launch URLs without reloading the page.
+    @st.fragment(run_every=60)
+    def app_cards() -> None:
+        cols = st.columns(3, gap="medium")
+        for col, app in zip(cols, apps):
+            with col:
+                with st.container(border=True, key="subject_" + app["id"]):
+                    block = (f'<div class="cm-app-art"><div class="icon"><span>{html.escape(app["icon"])}</span></div>'
+                             f'<div class="name">{html.escape(app["title"])}</div>'
+                             f'<div class="tag">{html.escape(app["tag"])}</div></div>')
+                    st.markdown(block, unsafe_allow_html=True)
+                    if app["ready"]:
+                        try:
+                            link = _make_launch_link(app)
+                            st.link_button("あそぶ ↗", link, type="primary", use_container_width=True)
+                        except (RuntimeError, ValueError):
+                            st.error("学習アプリへの接続を準備できませんでした。")
+                    else:
+                        st.button("まだ準備中", key="disabled_" + app["id"],
+                                  disabled=True, use_container_width=True,
+                                  help=f'Secretsに {app["secret"]} を設定してください')
+    app_cards()
+    st.caption("学習アプリはパソコン・スマートフォンともに別のタブで開きます。")
+    with st.container(border=True, key="home_progress"):
+        st.markdown('<div class="cm-progress-heading"><span>✦</span>きょうの がんばり</div>', unsafe_allow_html=True)
+        st.markdown('<div class="cm-note">あつめたスタンプで、きょうの がんばりを ふりかえろう。</div>', unsafe_allow_html=True)
+        if st.button("今日の成果を確認する", key="home_today", type="primary", use_container_width=True):
+            _open_today()
             st.rerun()
-    with right:
-        st.link_button("別のタブでひらく ↗", url=app["url"], use_container_width=True)
-    st.caption("アプリが表示されない場合は「別のタブでひらく」を使ってください。")
-    components.iframe(app["url"], height=775, scrolling=True)
-    if st.button("今日の成果を確認する", key="game_today", type="primary", use_container_width=True):
-        _open_today()
-        st.rerun()
 
 
 def render_stamp_book(rows: list[dict], target_day: date, truncated: bool) -> None:
@@ -503,7 +563,7 @@ def render_history(url: str, key: str, profile: str, missing: list[str]) -> None
             return
         with st.spinner("スタンプを確認しています…"):
             try:
-                rows, truncated = fetch_day(url, key, profile, chosen)
+                rows, truncated = fetch_day(url, key, profile, chosen, st.session_state.get("cm_access_token", ""))
                 st.session_state.cm_history_rows = rows
                 st.session_state.cm_history_truncated = truncated
                 st.session_state.cm_history_error = None
@@ -536,8 +596,6 @@ def main() -> None:
     st.markdown(STYLES, unsafe_allow_html=True)
     if "cm_page" not in st.session_state:
         st.session_state.cm_page = "home"
-    if "cm_game" not in st.session_state:
-        st.session_state.cm_game = None
     if "cm_jst_day" not in st.session_state:
         st.session_state.cm_jst_day = now_jst().date()
 
@@ -551,6 +609,15 @@ def main() -> None:
         midnight_check()
 
     render_header()
+    # Identify the actual browser before using any per-user cached state.
+    profile, token = cm_guest_identity()
+    if st.session_state.get('cm_guest_validated_for') != profile:
+        st.session_state.cm_guest_validated_for = profile
+        for k in list(st.session_state.keys()):
+            if k.startswith("cm_link_"):
+                del st.session_state[k]
+        for stale in ('cm_today_rows','cm_history_rows','cm_today_loaded_for','cm_history_loaded_for'):
+            st.session_state.pop(stale, None)
     render_navigation()
     url, key, profile, missing = _db_config()
     apps = [{**spec, "url": _setting(spec["secret"]),
@@ -558,8 +625,6 @@ def main() -> None:
 
     if st.session_state.cm_page == "home":
         render_home(apps)
-    elif st.session_state.cm_page == "game":
-        render_game(apps)
     elif st.session_state.cm_page == "today":
         render_today(url, key, profile, missing)
     elif st.session_state.cm_page == "history":
@@ -571,11 +636,223 @@ def main() -> None:
     if missing:
         with st.expander("接続設定（管理者向け）", expanded=False):
             st.warning("Streamlit Secretsで次の項目を設定してください：" + "、".join(missing))
-            st.caption("スタンプはSupabaseの既存chokomana_stampsテーブルから取得します。"
-                       "秘密鍵をGitHubやブラウザ画面に貼り付けないでください。")
+            st.caption("スタンプはSupabaseのchokomana_stampsテーブルから本人分だけ取得します。")
     elif st.session_state.cm_page in ("today", "history"):
         st.caption("記録の保存は各学習アプリで行います。この画面は参照のみです。")
 
+
+# ---- CHOCOMANA GUEST IDENTITY: autogenerated, server verified ----
+"""Shared auth/launch component source copied into each app.py for standalone deployment.
+Browser keeps anonymous auth JWT/refresh tokens in localStorage per app origin.
+No service key or refresh token is ever placed in a URL.
+"""
+import hashlib
+import json
+import os
+import re
+import tempfile
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+
+import streamlit as st
+import streamlit.components.v1 as components
+
+CM_PUBLIC_URL = 'https://keewulninyoeylgflshb.supabase.co'
+CM_PUBLIC_KEY = 'sb_publishable_iud9MpcZSxZHzSczRTIDqg_4BNZWQ8g'
+CM_SOURCE_KEYS = ('kotoba','soroban','geometry')
+CM_TICKET_SECONDS = 900
+
+
+def cm_secret(name, default=''):
+    try: value = st.secrets.get(name)
+    except Exception: value = None
+    if value is None: value = os.environ.get(name, default)
+    return str(value or '').strip()
+
+
+def cm_api_request(url, method, path, *, key, token=None, payload=None, params=None, timeout=8, prefer=None):
+    from urllib.parse import urlencode
+    base = url.rstrip('/') + path
+    if params: base += '?' + urlencode(params)
+    headers = {'apikey': key, 'Accept':'application/json', 'Content-Type':'application/json'}
+    if token: headers['Authorization']='Bearer '+token
+    elif key and not key.startswith('sb_secret_') and not key.startswith('sb_publishable_'):
+        headers['Authorization']='Bearer '+key
+    if prefer: headers['Prefer']=prefer
+    data=None if payload is None else json.dumps(payload).encode('utf-8')
+    req=Request(base,data=data,headers=headers,method=method)
+    try:
+        with urlopen(req,timeout=timeout) as response:
+            raw=response.read()
+            return json.loads(raw) if raw else None
+    except HTTPError as e:
+        raise RuntimeError(f'通信に失敗しました（HTTP {e.code}）') from None
+    except (URLError,TimeoutError,OSError):
+        raise RuntimeError('接続を確認してください') from None
+
+
+def cm_validate_guest(access_token):
+    if not access_token or not isinstance(access_token,str) or len(access_token)>16000:
+        raise ValueError('認証情報がありません')
+    url=cm_secret('SUPABASE_URL',CM_PUBLIC_URL)
+    key=cm_secret('SUPABASE_PUBLISHABLE_KEY',CM_PUBLIC_KEY)
+    user=cm_api_request(url,'GET','/auth/v1/user',key=key,token=access_token)
+    if not isinstance(user,dict) or not re.fullmatch(r'[0-9a-f-]{36}',str(user.get('id',''))):
+        raise ValueError('利用者IDを確認できません')
+    if user.get('is_anonymous') is not True:
+        raise ValueError('匿名利用者ではありません')
+    return user['id']
+
+
+def cm_auth_html():
+    """Pure JS client using documented GoTrue Auth REST endpoints.
+    No CDN; works from the self-hosted Streamlit component origin.
+    """
+    source=r'''<!doctype html><html lang="ja"><meta charset="utf-8"><style>body{margin:0}</style>
+<script>
+(()=>{
+const url=__URL__,key=__KEY__,storageName='chokomana_guest_auth_2026_01';
+const secret={get(){try{return JSON.parse(localStorage.getItem(storageName)||'null')}catch(e){return null}},set(v){localStorage.setItem(storageName,JSON.stringify(v))}};
+let sent='';let busy=false;
+const emit=v=>window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:v},'*');
+async function api(method,path,body,token){
+ const resp=await fetch(url+path,{method,headers:{'apikey':key,'Content-Type':'application/json',...(token?{'Authorization':'Bearer '+token}:{})},...(body?{body:JSON.stringify(body)}:{})});
+ const json=await resp.json().catch(()=>({}));
+ if(!resp.ok)throw new Error('HTTP '+resp.status+(json.error_code?': '+json.error_code:''));
+ return json;
+}
+async function authenticate(){
+ if(busy)return;busy=true;
+ try{
+  let session=secret.get();
+  if(session?.access_token && session?.refresh_token){
+   try{
+    const info=await api('GET','/auth/v1/user',null,session.access_token);
+    if(info?.id && info?.is_anonymous===true){emit({status:'ready',access_token:session.access_token});return}
+    throw new Error('保存済みIDが一致しません');
+   }catch(e){
+    try{
+     const refreshed=await api('POST','/auth/v1/token?grant_type=refresh_token',{refresh_token:session.refresh_token});
+     if(!refreshed.access_token||!refreshed.refresh_token)throw Error('更新できません');
+     secret.set(refreshed);emit({status:'ready',access_token:refreshed.access_token});return;
+    }catch(ex){emit({status:'error',reason:'保存済みの匿名セッションを更新できません。ブラウザデータを削除せず管理者へお問い合わせください。'});return}
+   }
+  }
+  // New users only. No silent new identity if an old identity cannot be restored.
+  session=await api('POST','/auth/v1/signup',{data:{}});
+  if(!session.access_token||!session.refresh_token||!session.user?.is_anonymous)throw Error('匿名認証が無効です');
+  secret.set(session);emit({status:'ready',access_token:session.access_token});
+ }catch(e){emit({status:'error',reason:'匿名利用を開始できません。Supabase Authで「Allow anonymous sign-ins」を有効にしてください。'+String(e.message).slice(0,90)})}
+ finally{busy=false}
+}
+window.addEventListener('message',e=>{if(e.data?.type==='streamlit:render')authenticate()});
+window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:componentReady',apiVersion:1},'*');
+window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:0},'*');
+setTimeout(authenticate,50);
+})();
+</script></html>'''
+    return source.replace('__URL__',json.dumps(cm_secret('SUPABASE_URL',CM_PUBLIC_URL))).replace('__KEY__',json.dumps(cm_secret('SUPABASE_PUBLISHABLE_KEY',CM_PUBLIC_KEY)))
+
+
+@st.cache_resource(max_entries=4)
+def cm_auth_component(frontend):
+    digest=hashlib.sha256(frontend.encode()).hexdigest()[:18]
+    folder=Path(tempfile.gettempdir())/('cm_guest_auth_'+digest)
+    folder.mkdir(exist_ok=True,parents=True)
+    (folder/'index.html').write_text(frontend,encoding='utf-8')
+    return components.declare_component('cm_guest_auth_'+digest,path=str(folder))
+
+
+def cm_guest_identity():
+    event=cm_auth_component(cm_auth_html())(key='cm_guest_auth',default=None)
+    if event and event.get('status')=='ready':
+        token=event.get('access_token')
+        if st.session_state.get('cm_access_token')!=token:
+            try:
+                profile=cm_validate_guest(token)
+                st.session_state['cm_profile']=profile
+                st.session_state['cm_access_token']=token
+            except (ValueError,RuntimeError) as exc:
+                st.error('利用者を確認できません。'+str(exc))
+                st.stop()
+        return st.session_state['cm_profile'],st.session_state['cm_access_token']
+    if event and event.get('status')=='error':
+        st.error(str(event.get('reason') or '匿名認証を開始できません')[:250])
+        st.stop()
+    # Token is received on each browser page load, not recovered from another user's server session.
+    st.info('利用者の準備をしています…')
+    st.stop()
+
+
+def cm_service_config():
+    url=cm_secret('SUPABASE_URL',CM_PUBLIC_URL)
+    key=cm_secret('SUPABASE_SERVICE_ROLE_KEY') or cm_secret('SUPABASE_SECRET_KEY')
+    if not url.startswith('https://') or not key:
+        raise RuntimeError('Supabaseのサーバー側接続設定が不足しています')
+    return url,key
+
+
+def cm_issue_ticket(profile,source):
+    if source not in CM_SOURCE_KEYS:raise ValueError('未登録のアプリです')
+    import secrets
+    raw=secrets.token_urlsafe(32)
+    url,key=cm_service_config()
+    data={'ticket_hash':hashlib.sha256(raw.encode('utf-8')).hexdigest(),'profile_id':profile,
+          'source_app':source,'expires_at':(datetime.now(timezone.utc)+timedelta(seconds=CM_TICKET_SECONDS)).isoformat()}
+    cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,payload=data,prefer='return=minimal')
+    return raw
+
+
+def cm_consume_ticket(source):
+    """Atomically redeem one-time launch code, proof of portal-authenticated user.
+    Requires the learning app's own server-side service secret.
+    """
+    if source not in CM_SOURCE_KEYS:raise ValueError('未登録アプリです')
+    ticket=st.query_params.get('cm_launch')
+    existing=st.session_state.get('cm_child_profile')
+    if existing:
+        if ticket:
+            try: del st.query_params['cm_launch']
+            except Exception:pass
+        return existing
+    if not ticket or not isinstance(ticket,str) or len(ticket)>256:
+        return None
+    url,key=cm_service_config()
+    params={'ticket_hash':'eq.'+hashlib.sha256(ticket.encode()).hexdigest(),
+            'source_app':'eq.'+source,'used_at':'is.null',
+            'expires_at':'gt.'+datetime.now(timezone.utc).isoformat(),'select':'profile_id'}
+    rows=cm_api_request(url,'PATCH','/rest/v1/chokomana_launch_tickets',key=key,
+                        payload={'used_at':datetime.now(timezone.utc).isoformat()},
+                        params=params,prefer='return=representation')
+    try:del st.query_params['cm_launch']
+    except Exception:pass
+    if not isinstance(rows,list) or len(rows)!=1:
+        raise ValueError('起動リンクが期限切れ、または使用済みです。ちょこまなからもう一度開いてください。')
+    st.session_state['cm_child_profile']=str(rows[0]['profile_id'])
+    return st.session_state['cm_child_profile']
+
+
+def cm_child_identity(source):
+    """Child can play launched from portal or standalone with an automatic anon ID.
+    Server validates identity; no fixed shared profile or public service keys.
+    """
+    launched=cm_consume_ticket(source)
+    if launched:return launched
+    profile,_=cm_guest_identity()
+    return profile
+
+
+def cm_launch_url(base,code):
+    parsed=urlsplit(base)
+    if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError('HTTPSの学習アプリURLを設定してください')
+    query=dict(parse_qsl(parsed.query,keep_blank_values=True))
+    query['cm_launch']=code
+    return urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode(query),''))
 
 if __name__ == "__main__":
     main()
