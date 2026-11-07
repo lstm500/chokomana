@@ -18,7 +18,7 @@ Optional Streamlit Secrets:
   SOROBAN_APP_URL = "https://...streamlit.app"
   GEOMETRY_APP_URL = "https://...streamlit.app"
 
-Security: guest reads are protected by RLS, launch tickets are one-time,
+Security: username/password accounts and sessions are verified server-side; launch tickets are one-time,
 service/secret keys are kept only in the Python server process.
 """
 from __future__ import annotations
@@ -80,16 +80,13 @@ def _valid_https_url(value: str) -> bool:
 
 
 def _db_config() -> tuple[str, str, str, list[str]]:
-    """Return the logged-in guest identity and its JWT for RLS-backed reads."""
-    url = _setting("SUPABASE_URL", DEFAULT_SUPABASE_URL).rstrip("/")
-    key = _setting("SUPABASE_PUBLISHABLE_KEY", CM_PUBLIC_KEY)
+    """Read only the profile verified from this browser's possession token."""
     profile = st.session_state.get("cm_profile", "")
-    token = st.session_state.get("cm_access_token", "")
-    missing = []
-    if not _valid_https_url(url):
-        missing.append("SUPABASE_URL")
-    if not token or not profile:
-        missing.append("匿名セッション")
+    try:
+        url, key = cm_service_config()
+    except RuntimeError:
+        return "", "", profile, ["SUPABASE_URL / SUPABASE_SECRET_KEY"]
+    missing = [] if profile else ["利用者の自動連携"]
     return url, key, profile, missing
 
 
@@ -98,17 +95,20 @@ def fetch_day(url: str, public_key: str, profile_id: str, target_day: date, acce
 
     study_date is a generated JST date in PostgreSQL. No new rows are written.
     """
-    if not _valid_https_url(url) or not public_key or not profile_id or not access_token:
+    if not _valid_https_url(url) or not public_key or not profile_id:
         raise ValueError("Supabase接続設定または学習者IDがありません")
     rows = []
     base = url.rstrip("/") + "/rest/v1/" + TABLE_NAME
     headers = {
         "apikey": public_key,
-        "Authorization": "Bearer " + access_token,
         "Accept": "application/json",
         "User-Agent": "chokomana-hub/2.0",
     }
 
+    if profile_id != st.session_state.get("cm_profile"):
+        raise ValueError("利用者の連携を確認できません")
+    if not public_key.startswith("sb_secret_"):
+        headers["Authorization"] = "Bearer " + public_key
     offset = 0
     truncated = False
     while offset < MAX_STAMPS_PER_DAY:
@@ -420,6 +420,16 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .st-key-cm_navigation [data-testid="stColumn"]{width:calc((100% - 8px)/3)!important}
 }
 @media(max-width:350px){.cm-subject-label{font-size:16px}.cm-subject-icon{width:42px;height:42px}.cm-brand p{font-size:9px}}
+
+.cm-signin-title{font-size:23px;font-weight:800;line-height:1.6;color:#233c3c;margin:12px 0 8px}
+.cm-signin-note{font-size:14px;line-height:1.9;color:#61756e;margin:0 0 16px}
+.st-key-cm_account_form{max-width:520px;background:white;border-radius:20px!important;padding:20px!important}
+.st-key-cm_account_form label{font-weight:700}
+.st-key-cm_account_form [data-testid="stVerticalBlock"]{gap:12px}
+.st-key-cm_account_form [data-testid="stFormSubmitButton"] button{min-height:48px;background:#287466!important;border-color:#287466!important;color:white;border-radius:12px}
+.st-key-cm_account_mode [role="radiogroup"]{gap:12px}
+.st-key-cm_account_mode [data-testid="stMarkdownContainer"] p{font-size:15px}
+@media(max-width:640px){.cm-signin-title{font-size:21px}.st-key-cm_account_form{padding:16px!important}.cm-signin-note{font-size:13px}}
 </style>
 """
 
@@ -474,10 +484,25 @@ def _load_today_if_requested(url: str, key: str, profile: str, missing: list[str
 
 
 def _make_launch_link(app: dict) -> str:
-    """Open independently developed apps without requiring shared authentication."""
-    link = app["url"]
-    if not _valid_https_url(link):
+    """Issue the single-use code consumed by the independently hosted child app."""
+    from datetime import datetime, timedelta, timezone
+    if not _valid_https_url(app["url"]):
         raise ValueError("HTTPSの学習アプリURLを設定してください")
+    profile = st.session_state.get("cm_profile")
+    if not profile:
+        raise RuntimeError("利用者の連携を準備しています")
+    now = datetime.now(timezone.utc)
+    cache_key = "cm_link_" + app["id"]
+    cached = st.session_state.get(cache_key)
+    if cached and cached.get("profile") == profile and cached.get("url") == app["url"]:
+        if cached["expiry"] > now + timedelta(seconds=70):
+            return cached["link"]
+    code = cm_issue_ticket(profile, app["id"])
+    link = cm_launch_url(app["url"], code)
+    st.session_state[cache_key] = {
+        "profile": profile, "url": app["url"], "link": link,
+        "expiry": now + timedelta(seconds=CM_TICKET_SECONDS),
+    }
     return link
 
 
@@ -514,7 +539,10 @@ def home_cards_html(apps: list[dict]) -> str:
 
 def render_home(apps: list[dict]) -> None:
     st.markdown('<h2 class="cm-home-question">なにを まなぶ？</h2>', unsafe_allow_html=True)
-    st.markdown(home_cards_html(apps), unsafe_allow_html=True)
+    @st.fragment(run_every=60)
+    def launch_cards():
+        st.markdown(home_cards_html(apps), unsafe_allow_html=True)
+    launch_cards()
     with st.container(border=True, key="home_progress"):
         st.markdown('<div class="cm-progress-heading"><span>✦</span>きょうの がんばり</div>', unsafe_allow_html=True)
         if st.button("今日の成果を確認する", key="home_today", type="primary", use_container_width=True):
@@ -640,19 +668,19 @@ def main() -> None:
         midnight_check()
 
     render_header()
+    linked = cm_hub_identity()
+    if not linked:
+        return
     render_navigation()
     apps = [{**spec, "url": _setting(spec["secret"]),
-             "ready": _valid_https_url(_setting(spec["secret"]))} for spec in APP_DEFINITIONS]
+             "ready": linked and _valid_https_url(_setting(spec["secret"]))} for spec in APP_DEFINITIONS]
     if st.session_state.cm_page == "home":
         render_home(apps)
         return
+    if not linked:
+        return
 
-    # Only stamp pages need a verified learner identity.
-    profile, token = cm_guest_identity()
-    if st.session_state.get("cm_guest_validated_for") != profile:
-        st.session_state.cm_guest_validated_for = profile
-        for stale in ("cm_today_rows", "cm_history_rows", "cm_today_loaded_for", "cm_history_loaded_for"):
-            st.session_state.pop(stale, None)
+    profile = st.session_state["cm_profile"]
     url, key, profile, missing = _db_config()
 
     if st.session_state.cm_page == "home":
@@ -799,24 +827,288 @@ def cm_auth_component(frontend):
 
 
 def cm_guest_identity():
-    event=cm_auth_component(cm_auth_html())(key='cm_guest_auth',default=None)
-    if event and event.get('status')=='ready':
-        token=event.get('access_token')
-        if st.session_state.get('cm_access_token')!=token:
-            try:
-                profile=cm_validate_guest(token)
-                st.session_state['cm_profile']=profile
-                st.session_state['cm_access_token']=token
-            except (ValueError,RuntimeError) as exc:
-                st.error('利用者を確認できません。'+str(exc))
-                st.stop()
-        return st.session_state['cm_profile'],st.session_state['cm_access_token']
-    if event and event.get('status')=='error':
-        st.error(str(event.get('reason') or '匿名認証を開始できません')[:250])
+    if not cm_hub_identity():
         st.stop()
-    # Token is received on each browser page load, not recovered from another user's server session.
-    st.info('利用者の準備をしています…')
-    st.stop()
+    return st.session_state["cm_profile"], ""
+
+
+def cm_resolve_hub_device(token):
+    """Server-only map from a 256-bit browser capability to a learner UUID."""
+    from uuid import UUID
+    if not isinstance(token, str) or not re.fullmatch(r"[a-f0-9]{64}", token):
+        raise ValueError("端末の連携情報を確認できません")
+    device_hash = hashlib.sha256(("hub:" + token).encode()).hexdigest()
+    url, key = cm_service_config()
+    params = {"device_hash": "eq." + device_hash, "select": "profile_id", "limit": "1"}
+    rows = cm_api_request(url, "GET", "/rest/v1/chokomana_hub_devices", key=key, params=params)
+    if not rows:
+        # A competing first request cannot replace an already registered identity.
+        cm_api_request(url, "POST", "/rest/v1/chokomana_hub_devices", key=key,
+                       payload={"device_hash": device_hash},
+                       params={"on_conflict": "device_hash"},
+                       prefer="resolution=ignore-duplicates,return=minimal")
+        rows = cm_api_request(url, "GET", "/rest/v1/chokomana_hub_devices", key=key, params=params)
+    if not isinstance(rows, list) or len(rows) != 1:
+        raise RuntimeError("利用者の連携情報を取得できませんでした")
+    return str(UUID(rows[0]["profile_id"]))
+
+
+def cm_hub_device_html():
+    """Browser persistence contains a random session token, never a password."""
+    return r"""<!doctype html><html><meta charset="utf-8"><body><script>
+let loaded=false,lastCommand='';
+function snapshot(ack){
+ let session=null,legacy=null,ok=true;
+ try{session=localStorage.getItem('chokomana_account_session_v1');legacy=localStorage.getItem('chokomana_hub_device_v1')}catch(e){ok=false}
+ return {status:'ready',session_token:session,legacy_device_token:legacy,storage_ok:ok,ack:ack||null}
+}
+function emit(value){parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value,dataType:'json'},'*')}
+window.addEventListener('message',e=>{
+ if(e.source!==parent||e.data?.type!=='streamlit:render')return;
+ const c=e.data.args?.command;
+ if(c?.id&&c.id!==lastCommand){
+  lastCommand=c.id;let ok=true;
+  try{if(c.token)localStorage.setItem('chokomana_account_session_v1',c.token);else localStorage.removeItem('chokomana_account_session_v1')}catch(ex){ok=false}
+  const v=snapshot(c.id);v.storage_ok=ok;emit(v);loaded=true;
+ }else if(!loaded){loaded=true;emit(snapshot())}
+});
+parent.postMessage({isStreamlitMessage:true,type:'streamlit:componentReady',apiVersion:1},'*');
+parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:0},'*');
+</script></body></html>"""
+
+
+def cm_account_username(value):
+    name = str(value or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{2,31}", name):
+        raise ValueError("ユーザー名は半角英数字で3〜32文字にしてください。「_」「-」「.」も使えます。")
+    return name
+
+
+def cm_password_hash(password, salt=None):
+    import secrets
+    if not isinstance(password, str) or not 8 <= len(password) <= 128:
+        raise ValueError("パスワードは8〜128文字で入力してください。")
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.scrypt(password.encode("utf-8"), salt=bytes.fromhex(salt),
+                            n=16384, r=8, p=1, dklen=32).hex()
+    return "scrypt$16384$8$1$" + salt + "$" + digest
+
+
+def cm_password_matches(password, encoded):
+    import hmac
+    try:
+        kind, n, r, p, salt, expected = encoded.split("$")
+        if (kind, n, r, p) != ("scrypt", "16384", "8", "1"):
+            return False
+        if not re.fullmatch(r"[a-f0-9]{32}", salt) or not re.fullmatch(r"[a-f0-9]{64}", expected):
+            return False
+        # Verification runs even for an unknown username, using a dummy hash.
+        actual = hashlib.scrypt(password.encode("utf-8"), salt=bytes.fromhex(salt),
+                                 n=16384, r=8, p=1, dklen=32).hex()
+        return hmac.compare_digest(actual, expected)
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def cm_account_request(method, path, payload=None, params=None, prefer=None):
+    url, key = cm_service_config()
+    if path.startswith("/rpc/"):
+        path = "/rest/v1" + path
+    return cm_api_request(url, method, path, key=key, payload=payload, params=params, prefer=prefer)
+
+
+def cm_account_gate(username):
+    bucket = hashlib.sha256(("account:" + username).encode()).hexdigest()
+    allowed = cm_account_request("POST", "/rpc/chokomana_account_gate", {"bucket_key": bucket})
+    if allowed is not True:
+        raise ValueError("入力を繰り返したため、10分ほど待ってからお試しください。")
+    return bucket
+
+
+def cm_account_new_session(profile, username, bucket):
+    import secrets
+    token = secrets.token_hex(32)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    cm_account_request("POST", "/rest/v1/chokomana_account_sessions", {
+        "token_hash": token_hash, "profile_id": profile,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
+    }, prefer="return=minimal")
+    cm_account_request("PATCH", "/rest/v1/chokomana_auth_limits", {"attempts": 0},
+                       {"bucket_hash": "eq." + bucket}, "return=minimal")
+    return {"profile_id": profile, "username": username, "token": token}
+
+
+def cm_register_account(username, password, confirmation, legacy_token=None):
+    name = cm_account_username(username)
+    if password != confirmation:
+        raise ValueError("確認用パスワードが一致していません。もう一度入力してください。")
+    if not isinstance(password, str) or not 8 <= len(password) <= 128:
+        raise ValueError("パスワードは8〜128文字で入力してください。")
+    bucket = cm_account_gate(name)
+    encoded = cm_password_hash(password)
+    legacy_hash = None
+    if isinstance(legacy_token, str) and re.fullmatch(r"[a-f0-9]{64}", legacy_token):
+        legacy_hash = hashlib.sha256(("hub:" + legacy_token).encode()).hexdigest()
+    result = cm_account_request("POST", "/rpc/chokomana_register_account", {
+        "account_name": name, "encoded_password": encoded, "legacy_hash": legacy_hash,
+    })
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        raise ValueError("このユーザー名は使われています。別の名前にするか、「ログイン」を選んでください。")
+    return cm_account_new_session(result["profile_id"], name, bucket)
+
+
+def cm_login_account(username, password):
+    name = cm_account_username(username)
+    if not isinstance(password, str) or not 1 <= len(password) <= 128:
+        raise ValueError("ユーザー名とパスワードを確認してください。")
+    bucket = cm_account_gate(name)
+    rows = cm_account_request("GET", "/rest/v1/chokomana_accounts", params={
+        "username": "eq." + name, "select": "username,profile_id,password_hash", "limit": "1",
+    })
+    account = rows[0] if isinstance(rows, list) and len(rows) == 1 else None
+    encoded = account["password_hash"] if account else "scrypt$16384$8$1$" + "0"*32 + "$" + "0"*64
+    matches = cm_password_matches(password, encoded)
+    if not account or not matches:
+        raise ValueError("ユーザー名とパスワードを確認してください。")
+    return cm_account_new_session(account["profile_id"], account["username"], bucket)
+
+
+def cm_restore_account(token):
+    if not isinstance(token, str) or not re.fullmatch(r"[a-f0-9]{64}", token):
+        return None
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    rows = cm_account_request("GET", "/rest/v1/chokomana_account_sessions", params={
+        "token_hash": "eq." + token_hash, "expires_at": "gt." + datetime.now(timezone.utc).isoformat(),
+        "select": "profile_id", "limit": "1",
+    })
+    if not isinstance(rows, list) or len(rows) != 1:
+        return None
+    account = cm_account_request("GET", "/rest/v1/chokomana_accounts", params={
+        "profile_id": "eq." + str(rows[0]["profile_id"]), "select": "username,profile_id", "limit": "1",
+    })
+    if not isinstance(account, list) or len(account) != 1:
+        return None
+    return {**account[0], "token": token}
+
+
+def cm_clear_account_state():
+    for key in list(st.session_state):
+        if key.startswith(("cm_link_", "cm_today_", "cm_history_")) or key in (
+            "cm_profile", "cm_account_token", "cm_account_username", "cm_hub_validated_token"):
+            st.session_state.pop(key, None)
+    st.session_state.cm_page = "home"
+
+
+def cm_set_account(account):
+    if st.session_state.get("cm_profile") != account["profile_id"]:
+        cm_clear_account_state()
+    st.session_state["cm_profile"] = account["profile_id"]
+    st.session_state["cm_account_username"] = account["username"]
+    st.session_state["cm_account_token"] = account["token"]
+
+
+def cm_queue_account_command(token):
+    from uuid import uuid4
+    st.session_state["cm_account_command"] = {"id": str(uuid4()), "token": token}
+
+
+def cm_account_form(legacy_token):
+    if st.session_state.pop("cm_account_clear_fields", False):
+        for k in ("cm_login_password", "cm_signup_password", "cm_signup_confirmation"):
+            st.session_state.pop(k, None)
+    st.markdown('<div class="cm-signin-title">アカウントで学習を保存</div>'
+                '<p class="cm-signin-note">メール不要。<br>別の端末でも、同じ記録で使えます。</p>',
+                unsafe_allow_html=True)
+    action = st.radio("はじめてですか？", ["はじめて使う", "ログイン"], horizontal=True,
+                      key="cm_account_mode", label_visibility="collapsed")
+    signup = action == "はじめて使う"
+    with st.container(border=True, key="cm_account_form"):
+        st.markdown("**アカウントをつくる**" if signup else "**学習のつづきから**")
+        with st.form("cm_signup_form" if signup else "cm_login_form", clear_on_submit=False):
+            username = st.text_input("ユーザー名", key="cm_signup_username" if signup else "cm_login_username",
+                                     placeholder="例：rinmaru", max_chars=32,
+                                     help="半角英数字3〜32文字。「_」「-」「.」も使えます。大文字と小文字は区別しません。")
+            password = st.text_input("パスワード（8文字以上）" if signup else "パスワード", type="password", max_chars=128,
+                                     key="cm_signup_password" if signup else "cm_login_password",
+                                     help="8文字以上。入力欄の目のマークで確認できます。" if signup else None)
+            confirmation = st.text_input("パスワード（確認用）", type="password", max_chars=128,
+                                         key="cm_signup_confirmation") if signup else None
+            submitted = st.form_submit_button("登録してはじめる" if signup else "ログインする",
+                                               type="primary", use_container_width=True)
+        if submitted:
+            try:
+                with st.spinner("登録しています…" if signup else "ログインしています…"):
+                    account = (cm_register_account(username, password, confirmation, legacy_token)
+                               if signup else cm_login_account(username, password))
+                cm_set_account(account)
+                cm_queue_account_command(account["token"])
+                st.session_state["cm_account_clear_fields"] = True
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+            except RuntimeError:
+                st.error("接続できませんでした。入力はそのままで、もう一度お試しください。")
+        st.caption("ユーザー名とパスワードを保管してください。メールでの再設定はありません。")
+        if signup and legacy_token:
+            st.caption("このブラウザに未登録の学習履歴があれば、登録時に引き継ぎます。")
+
+
+def cm_hub_identity():
+    command = st.session_state.get("cm_account_command")
+    event = cm_auth_component(cm_hub_device_html())(key="cm_account_browser", command=command, default=None)
+    if not event and not command:
+        st.caption("ログイン状態を確認しています…")
+        return False
+    if not isinstance(event, dict):
+        event = {}
+    if command:
+        token = command.get("token")
+        if event.get("ack") == command["id"]:
+            st.session_state.pop("cm_account_command", None)
+    else:
+        token = event.get("session_token")
+    # A blocked localStorage must not prevent using the account in this session.
+    if event.get("storage_ok") is False and not command:
+        token = st.session_state.get("cm_account_token")
+    account = None
+    if token:
+        try:
+            account = cm_restore_account(token)
+        except RuntimeError:
+            st.error("ログイン状態を確認できませんでした。もう一度お試しください。")
+            if st.button("再試行", key="cm_account_retry"):
+                st.rerun()
+            return False
+        if not account:
+            cm_clear_account_state()
+            cm_queue_account_command(None)
+            st.info("ログインの有効期限が切れました。もう一度ログインしてください。")
+    if not account:
+        cm_clear_account_state()
+        cm_account_form(event.get("legacy_device_token"))
+        return False
+    cm_set_account(account)
+    if st.session_state.pop("cm_account_clear_fields", False):
+        for k in ("cm_login_password", "cm_signup_password", "cm_signup_confirmation"):
+            st.session_state.pop(k, None)
+    if event.get("storage_ok") is False:
+        st.caption("このブラウザではログインを保存できません。次回もユーザー名とパスワードでログインできます。")
+    with st.expander(account["username"] + " さん（アカウント）"):
+        st.caption("このブラウザでは次回から自動ログインします。別の人が使うときはログアウトしてください。")
+        if st.button("ログアウト", key="cm_account_logout", use_container_width=True):
+            try:
+                cm_account_request("PATCH", "/rest/v1/chokomana_account_sessions",
+                                   {"expires_at": datetime.now(timezone.utc).isoformat()},
+                                   {"token_hash": "eq." + hashlib.sha256(token.encode()).hexdigest()}, "return=minimal")
+            except RuntimeError:
+                st.error("ログアウトできませんでした。接続を確認して再試行してください。")
+                return False
+            cm_clear_account_state()
+            cm_queue_account_command(None)
+            st.session_state["cm_account_mode"] = "ログイン"
+            st.rerun()
+    return True
+
 
 
 def cm_service_config():
