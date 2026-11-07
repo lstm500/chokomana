@@ -430,6 +430,42 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .st-key-cm_account_mode [role="radiogroup"]{gap:12px}
 .st-key-cm_account_mode [data-testid="stMarkdownContainer"] p{font-size:15px}
 @media(max-width:640px){.cm-signin-title{font-size:21px}.st-key-cm_account_form{padding:16px!important}.cm-signin-note{font-size:13px}}
+/* Native Streamlit widgets must match the app's light surface in either OS theme. */
+.stApp{color-scheme:light;--st-text-color:#233c3c;--st-background-color:#fafbf7;--st-secondary-background-color:#f5f8f6;--st-primary-color:#287466;--st-border-color:#bacbc1}
+.stApp [data-testid="stWidgetLabel"],
+.stApp [data-testid="stWidgetLabel"] p,
+.stApp [data-testid="stWidgetLabel"] span,
+.stApp [data-testid="stRadioOption"],
+.stApp [data-testid="stRadioOption"] p,
+.stApp [data-testid="stRadioOption"] span{color:#233c3c!important;-webkit-text-fill-color:#233c3c!important}
+.st-key-cm_account_form [data-testid="stMarkdownContainer"],
+.st-key-cm_account_form [data-testid="stMarkdownContainer"] p,
+.st-key-cm_account_form [data-testid="stMarkdownContainer"] strong{color:#233c3c!important}
+.stApp [data-testid="stTextInputRootElement"],
+.stApp [data-testid="stTextInput"] [data-baseweb="input"]{background:#ffffff!important;color:#233c3c!important;border:1px solid #bacbc1!important;border-radius:10px!important;color-scheme:light}
+.stApp [data-testid="stTextInput"] input{background:transparent!important;color:#233c3c!important;-webkit-text-fill-color:#233c3c!important;caret-color:#233c3c!important;border:none!important}
+.stApp [data-testid="stTextInput"] input::placeholder{color:#65796e!important;-webkit-text-fill-color:#65796e!important;opacity:1!important}
+.stApp [data-testid="stTextInputRootElement"]:focus-within{outline:2px solid #287466;outline-offset:2px}
+.stApp [data-testid="stTextInputRootElement"] button,
+.stApp [data-testid="stTextInputRootElement"] button span,
+.stApp [data-testid="stTextInputRootElement"] button svg{color:#425f52!important;-webkit-text-fill-color:#425f52!important;background:transparent!important}
+.stApp [data-testid="stTooltipIcon"],
+.stApp [data-testid="stTooltipIcon"] svg{color:#425f52!important}
+.stApp input:-webkit-autofill{-webkit-text-fill-color:#233c3c!important;box-shadow:0 0 0 1000px #ffffff inset!important}
+.st-key-cm_account_form [data-testid="stFormSubmitButton"] button,
+.st-key-cm_account_form [data-testid="stFormSubmitButton"] button p,
+.st-key-cm_account_form [data-testid="stFormSubmitButton"] button span{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
+.stApp [data-testid="stCaptionContainer"],
+.stApp [data-testid="stCaptionContainer"] p{color:#61756e!important;-webkit-text-fill-color:#61756e!important}
+.st-key-cm_account_form [data-testid="stAlert"]{background:#fff0ec!important;color:#842c20!important;border-color:#e6b6ac!important}
+.st-key-cm_account_form [data-testid="stAlert"] [data-testid="stMarkdownContainer"],
+.st-key-cm_account_form [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p{color:#842c20!important;-webkit-text-fill-color:#842c20!important}
+[class*="st-key-nav_"] button p{color:inherit!important;-webkit-text-fill-color:currentColor!important}
+
+.st-key-cm_account_mode [role="radiogroup"]{display:flex;flex-wrap:wrap;gap:12px!important}
+.st-key-cm_account_mode [data-testid="stRadioOption"]{white-space:nowrap!important;flex-shrink:0;min-height:44px;padding:8px 10px;border:1px solid #bacbc1;border-radius:12px;background:#ffffff}
+.st-key-cm_account_mode [data-testid="stRadioOption"] p{white-space:nowrap!important;word-break:keep-all}
+.st-key-cm_account_mode [data-testid="stRadioOption"]:has(input:checked){background:#e5efe8;border-color:#287466}
 </style>
 """
 
