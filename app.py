@@ -379,42 +379,42 @@ h1,h2,h3{color:#233c3c!important}
 /* Compact, child-friendly home. Scope column overrides to navigation only. */
 header[data-testid="stHeader"]{display:none!important}
 .block-container{padding-top:1.2rem!important;padding-bottom:2rem!important}
-.cm-brand{margin:0 0 4px;gap:10px}
+.cm-brand{margin:0;gap:10px;padding-bottom:16px}
 .cm-brand h1{font-size:27px!important;line-height:1.35!important;padding:0!important}
-.cm-brand p{font-size:11px;line-height:1.5}
+.cm-brand p{font-size:11px;line-height:1.7;margin-top:5px}
 .cm-logo{width:42px;height:42px;flex:0 0 42px;border-radius:14px;font-size:25px}
 .st-key-cm_navigation [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:8px!important}
 .st-key-cm_navigation [data-testid="stColumn"]{min-width:0!important;width:calc((100% - 16px)/3)!important;flex:1 1 0!important}
 [class*="st-key-nav_"] button{min-height:44px!important;padding:6px 4px!important}
 [class*="st-key-nav_"] button p{font-size:13px!important;white-space:nowrap}
-.cm-home-question{font-size:23px!important;font-weight:800;line-height:1.4!important;padding:0!important;margin:4px 0 0!important}
-.cm-subject-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.cm-home-question{font-size:23px!important;font-weight:800;line-height:1.4!important;padding:0 0 18px!important;margin:8px 0 0!important}
+.cm-subject-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding-bottom:24px}
 .cm-subject{--subject:#b14f43;--wash:#fff0e9;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:23px 10px 16px;border:2px solid #efcabc;border-radius:22px;background:var(--wash);color:var(--subject)!important;text-decoration:none!important;min-width:0;box-shadow:0 4px 0 #efcabc;transition:transform .12s}
 .cm-subject-soroban{--subject:#28689b;--wash:#edf5ff;border-color:#c0d7ee;box-shadow:0 4px 0 #c0d7ee}
 .cm-subject-geometry{--subject:#886319;--wash:#fff7dd;border-color:#e8d89f;box-shadow:0 4px 0 #e8d89f}
 .cm-subject-icon{display:block;width:68px;height:68px;flex-shrink:0}
 .cm-subject-icon svg{display:block;width:100%;height:100%}
 .cm-subject-label{font-size:24px;font-weight:850;line-height:1.4;white-space:nowrap}
-.cm-subject-go{font-size:14px;font-weight:750;line-height:1.4;background:#ffffffb8;border-radius:50px;padding:6px 16px}
+.cm-subject-go{display:flex;align-items:center;flex-wrap:nowrap;white-space:nowrap;gap:4px;font-size:14px;font-weight:750;line-height:1.6;letter-spacing:.03em;background:#ffffffb8;border-radius:50px;padding:6px 16px}
 a.cm-subject:hover{transform:translateY(-2px);text-decoration:none!important}
 a.cm-subject:active{transform:translateY(2px);box-shadow:none}
 a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .cm-subject-disabled{opacity:.55}
-.st-key-home_progress{padding:14px 16px!important;margin-top:5px}
+.st-key-home_progress{padding:16px!important;margin-top:0}
 .cm-progress-heading{font-size:17px;margin-bottom:3px}
 @media(max-width:640px){
 .block-container{padding:16px 14px 36px!important}
 [data-testid="stMainBlockContainer"]>[data-testid="stVerticalBlock"]{gap:12px!important}
 .cm-brand h1{font-size:24px!important}
 .cm-brand p{font-size:10px}
-.cm-brand{margin-bottom:0}
-.cm-home-question{font-size:21px!important;margin:2px 0 0!important}
-.cm-subject-grid{gap:9px}
+.cm-brand{margin-bottom:0;padding-bottom:16px}
+.cm-home-question{font-size:21px!important;margin:8px 0 0!important;padding-bottom:18px!important}
+.cm-subject-grid{gap:9px;padding-bottom:24px}
 .cm-subject{border-radius:17px;padding:15px 4px 11px;gap:10px}
 .cm-subject-icon{width:48px;height:48px}
 .cm-subject-label{font-size:18px}
 .cm-subject-go{font-size:12px;padding:5px 9px}
-.st-key-home_progress{padding:12px!important;margin-top:0}
+.st-key-home_progress{padding:14px!important;margin-top:0}
 [class*="st-key-nav_"] button p{font-size:11px!important}
 .st-key-cm_navigation [data-testid="stHorizontalBlock"]{gap:4px!important}
 .st-key-cm_navigation [data-testid="stColumn"]{width:calc((100% - 8px)/3)!important}
@@ -486,14 +486,16 @@ def home_cards_html(apps: list[dict]) -> str:
     labels = {"kotoba": "こくご", "soroban": "そろばん", "geometry": "ずけい"}
     icons = {
         "kotoba": '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 13c10-3 17-1 24 4 7-5 14-7 24-4v37c-9-3-16-1-24 4-8-5-15-7-24-4Z" fill="currentColor" opacity=".16"/><path d="M8 13c10-3 17-1 24 4 7-5 14-7 24-4v37c-9-3-16-1-24 4-8-5-15-7-24-4Zm24 4v37M15 25l10 3m-10 7 10 3m14-10 10-3m-10 13 10-3" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-        "soroban": '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="10" width="52" height="44" rx="5" fill="currentColor" opacity=".12"/><g stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 10h52v44H6ZM7 28h50M19 14v36m13-36v36m13-36v36"/></g><g fill="currentColor"><path d="m12 21 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5ZM12 35l7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Z"/></g></svg>',
+        "soroban": '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="10" width="52" height="44" rx="5" fill="currentColor" opacity=".12"/><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 10h52v44H6ZM7 28h50M19 14v36m13-36v36m13-36v36"/></g><g fill="currentColor"><path d="m12 21 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5ZM12 35l7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Z"/></g></svg>',
         "geometry": '<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="21" cy="23" r="14" fill="currentColor" opacity=".18"/><circle cx="21" cy="23" r="14" stroke="currentColor" stroke-width="3" fill="none"/><path d="m38 14 20 34H18Z" fill="currentColor" opacity=".3"/><path d="m38 14 20 34H18Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M8 40h19v17H8Z" fill="currentColor" opacity=".65"/></svg>',
     }
     cards = []
     for app in apps:
         app_id = app["id"]
         label = labels.get(app_id, app["title"])
-        body = (f'<span class="cm-subject-icon">{icons.get(app_id, "")}</span>'
+        icon_color = {"kotoba": "#b14f43", "soroban": "#28689b", "geometry": "#886319"}.get(app_id, "#287466")
+        icon = icons.get(app_id, "").replace("currentColor", icon_color)
+        body = (f'<span class="cm-subject-icon">{icon}</span>'
                 f'<span class="cm-subject-label">{html.escape(label)}</span>')
         if app["ready"]:
             try:
@@ -501,7 +503,7 @@ def home_cards_html(apps: list[dict]) -> str:
                 cards.append(f'<a class="cm-subject cm-subject-{html.escape(app_id)}" '
                              f'href="{html.escape(link, quote=True)}" target="_blank" rel="noopener noreferrer" '
                              f'aria-label="{html.escape(app["title"], quote=True)}を別タブで開く">'
-                             f'{body}<span class="cm-subject-go">あそぶ →</span></a>')
+                             f'{body}<span class="cm-subject-go">あそぶ<span aria-hidden="true"> →</span></span></a>')
                 continue
             except (RuntimeError, ValueError):
                 pass
