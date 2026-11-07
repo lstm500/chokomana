@@ -375,6 +375,51 @@ h1,h2,h3{color:#233c3c!important}
 .st-key-home_progress{padding:18px!important}
 [class*="st-key-nav_"] button p{font-size:12px}
 }
+
+/* Compact, child-friendly home. Scope column overrides to navigation only. */
+header[data-testid="stHeader"]{display:none!important}
+.block-container{padding-top:1.2rem!important;padding-bottom:2rem!important}
+.cm-brand{margin:0 0 4px;gap:10px}
+.cm-brand h1{font-size:27px!important;line-height:1.35!important;padding:0!important}
+.cm-brand p{font-size:11px;line-height:1.5}
+.cm-logo{width:42px;height:42px;flex:0 0 42px;border-radius:14px;font-size:25px}
+.st-key-cm_navigation [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:8px!important}
+.st-key-cm_navigation [data-testid="stColumn"]{min-width:0!important;width:calc((100% - 16px)/3)!important;flex:1 1 0!important}
+[class*="st-key-nav_"] button{min-height:44px!important;padding:6px 4px!important}
+[class*="st-key-nav_"] button p{font-size:13px!important;white-space:nowrap}
+.cm-home-question{font-size:23px!important;font-weight:800;line-height:1.4!important;padding:0!important;margin:4px 0 0!important}
+.cm-subject-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.cm-subject{--subject:#b14f43;--wash:#fff0e9;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:23px 10px 16px;border:2px solid #efcabc;border-radius:22px;background:var(--wash);color:var(--subject)!important;text-decoration:none!important;min-width:0;box-shadow:0 4px 0 #efcabc;transition:transform .12s}
+.cm-subject-soroban{--subject:#28689b;--wash:#edf5ff;border-color:#c0d7ee;box-shadow:0 4px 0 #c0d7ee}
+.cm-subject-geometry{--subject:#886319;--wash:#fff7dd;border-color:#e8d89f;box-shadow:0 4px 0 #e8d89f}
+.cm-subject-icon{display:block;width:68px;height:68px;flex-shrink:0}
+.cm-subject-icon svg{display:block;width:100%;height:100%}
+.cm-subject-label{font-size:24px;font-weight:850;line-height:1.4;white-space:nowrap}
+.cm-subject-go{font-size:14px;font-weight:750;line-height:1.4;background:#ffffffb8;border-radius:50px;padding:6px 16px}
+a.cm-subject:hover{transform:translateY(-2px);text-decoration:none!important}
+a.cm-subject:active{transform:translateY(2px);box-shadow:none}
+a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
+.cm-subject-disabled{opacity:.55}
+.st-key-home_progress{padding:14px 16px!important;margin-top:5px}
+.cm-progress-heading{font-size:17px;margin-bottom:3px}
+@media(max-width:640px){
+.block-container{padding:16px 14px 36px!important}
+[data-testid="stMainBlockContainer"]>[data-testid="stVerticalBlock"]{gap:12px!important}
+.cm-brand h1{font-size:24px!important}
+.cm-brand p{font-size:10px}
+.cm-brand{margin-bottom:0}
+.cm-home-question{font-size:21px!important;margin:2px 0 0!important}
+.cm-subject-grid{gap:9px}
+.cm-subject{border-radius:17px;padding:15px 4px 11px;gap:10px}
+.cm-subject-icon{width:48px;height:48px}
+.cm-subject-label{font-size:18px}
+.cm-subject-go{font-size:12px;padding:5px 9px}
+.st-key-home_progress{padding:12px!important;margin-top:0}
+[class*="st-key-nav_"] button p{font-size:11px!important}
+.st-key-cm_navigation [data-testid="stHorizontalBlock"]{gap:4px!important}
+.st-key-cm_navigation [data-testid="stColumn"]{width:calc((100% - 8px)/3)!important}
+}
+@media(max-width:350px){.cm-subject-label{font-size:16px}.cm-subject-icon{width:42px;height:42px}.cm-brand p{font-size:9px}}
 </style>
 """
 
@@ -386,7 +431,8 @@ def render_header() -> None:
 
 
 def render_navigation() -> None:
-    cols = st.columns(3, gap="small")
+    with st.container(key="cm_navigation"):
+        cols = st.columns(3, gap="small")
     labels = (("home", "ホーム"), ("today", "今日の成果"), ("history", "過去のスタンプ"))
     for col, (page, label) in zip(cols, labels):
         with col:
@@ -435,47 +481,44 @@ def _make_launch_link(app: dict) -> str:
     return link
 
 
+def home_cards_html(apps: list[dict]) -> str:
+    """One native anchor per subject, kept side-by-side at phone widths."""
+    labels = {"kotoba": "こくご", "soroban": "そろばん", "geometry": "ずけい"}
+    icons = {
+        "kotoba": '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 13c10-3 17-1 24 4 7-5 14-7 24-4v37c-9-3-16-1-24 4-8-5-15-7-24-4Z" fill="currentColor" opacity=".16"/><path d="M8 13c10-3 17-1 24 4 7-5 14-7 24-4v37c-9-3-16-1-24 4-8-5-15-7-24-4Zm24 4v37M15 25l10 3m-10 7 10 3m14-10 10-3m-10 13 10-3" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+        "soroban": '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="10" width="52" height="44" rx="5" fill="currentColor" opacity=".12"/><g stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 10h52v44H6ZM7 28h50M19 14v36m13-36v36m13-36v36"/></g><g fill="currentColor"><path d="m12 21 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5ZM12 35l7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Z"/></g></svg>',
+        "geometry": '<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="21" cy="23" r="14" fill="currentColor" opacity=".18"/><circle cx="21" cy="23" r="14" stroke="currentColor" stroke-width="3" fill="none"/><path d="m38 14 20 34H18Z" fill="currentColor" opacity=".3"/><path d="m38 14 20 34H18Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M8 40h19v17H8Z" fill="currentColor" opacity=".65"/></svg>',
+    }
+    cards = []
+    for app in apps:
+        app_id = app["id"]
+        label = labels.get(app_id, app["title"])
+        body = (f'<span class="cm-subject-icon">{icons.get(app_id, "")}</span>'
+                f'<span class="cm-subject-label">{html.escape(label)}</span>')
+        if app["ready"]:
+            try:
+                link = _make_launch_link(app)
+                cards.append(f'<a class="cm-subject cm-subject-{html.escape(app_id)}" '
+                             f'href="{html.escape(link, quote=True)}" target="_blank" rel="noopener noreferrer" '
+                             f'aria-label="{html.escape(app["title"], quote=True)}を別タブで開く">'
+                             f'{body}<span class="cm-subject-go">あそぶ →</span></a>')
+                continue
+            except (RuntimeError, ValueError):
+                pass
+        cards.append(f'<div class="cm-subject cm-subject-{html.escape(app_id)} cm-subject-disabled" '
+                     f'aria-disabled="true">{body}<span class="cm-subject-go">じゅんび中</span></div>')
+    return '<div class="cm-subject-grid">' + "".join(cards) + '</div>'
+
+
 def render_home(apps: list[dict]) -> None:
-    st.markdown('''<div class="cm-hero"><div class="cm-hero-copy">
-        <div class="cm-eyebrow">ちいさな まなび、まいにち。</div>
-        <h2>きょうは なにを まなぶ？</h2>
-        <p>すきなことから、ひとつずつ。<br>あそんで、まなんで、スタンプをあつめよう。</p></div>
-        <svg class="cm-hero-art" viewBox="0 0 128 128" fill="none" aria-hidden="true">
-        <rect x="15" y="9" width="97" height="110" rx="17" fill="#fffdf7" stroke="#ceddc9" stroke-width="2"/>
-        <path d="M35 32h57M35 43h33" stroke="#d4e1cd" stroke-width="5" stroke-linecap="round"/>
-        <circle cx="64" cy="79" r="25" fill="#f8e7a4" stroke="#d4b754" stroke-width="2" stroke-dasharray="3 3"/>
-        <path d="m64 62 5 11 12 2-9 9 2 12-10-6-11 6 2-12-9-9 13-2z" fill="#b68c2b"/>
-        </svg></div>''', unsafe_allow_html=True)
-    st.markdown('<div class="cm-page-heading">まなびを えらぶ<span class="cm-section-hint">すきなカードから はじめよう</span></div>', unsafe_allow_html=True)
-    # Fragments refresh expiring one-time launch URLs without reloading the page.
-    @st.fragment(run_every=60)
-    def app_cards() -> None:
-        cols = st.columns(3, gap="medium")
-        for col, app in zip(cols, apps):
-            with col:
-                with st.container(border=True, key="subject_" + app["id"]):
-                    block = (f'<div class="cm-app-art"><div class="icon"><span>{html.escape(app["icon"])}</span></div>'
-                             f'<div class="name">{html.escape(app["title"])}</div>'
-                             f'<div class="tag">{html.escape(app["tag"])}</div></div>')
-                    st.markdown(block, unsafe_allow_html=True)
-                    if app["ready"]:
-                        try:
-                            link = _make_launch_link(app)
-                            st.link_button("あそぶ ↗", link, type="primary", use_container_width=True)
-                        except (RuntimeError, ValueError):
-                            st.error("学習アプリへの接続を準備できませんでした。")
-                    else:
-                        st.button("まだ準備中", key="disabled_" + app["id"],
-                                  disabled=True, use_container_width=True,
-                                  help=f'Secretsに {app["secret"]} を設定してください')
-    app_cards()
-    st.caption("学習アプリはパソコン・スマートフォンともに別のタブで開きます。")
+    st.markdown('<h2 class="cm-home-question">なにを まなぶ？</h2>', unsafe_allow_html=True)
+    st.markdown(home_cards_html(apps), unsafe_allow_html=True)
     with st.container(border=True, key="home_progress"):
         st.markdown('<div class="cm-progress-heading"><span>✦</span>きょうの がんばり</div>', unsafe_allow_html=True)
-        st.markdown('<div class="cm-note">あつめたスタンプで、きょうの がんばりを ふりかえろう。</div>', unsafe_allow_html=True)
         if st.button("今日の成果を確認する", key="home_today", type="primary", use_container_width=True):
             _open_today()
             st.rerun()
+    st.caption("学習アプリは別のタブで開きます。")
 
 
 def render_stamp_book(rows: list[dict], target_day: date, truncated: bool) -> None:
