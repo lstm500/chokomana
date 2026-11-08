@@ -194,7 +194,7 @@ def stamp_grid_html(rows: list[dict]) -> str:
             <div class="cm-stamp-meta">{subj} · {score}問</div>
             <div class="cm-stamp-time">{when}</div>
           </article>''')
-    return '<div class="cm-stamp-grid">' + ''.join(cards) + '</div>'
+    return re.sub(r'>\s+<', '><', '<div class="cm-stamp-grid">' + ''.join(cards) + '</div>')
 
 
 def _safe_json(data: object) -> str:
@@ -225,9 +225,9 @@ def voice_panel(rows: list[dict]) -> str:
 .tile.silver{background:radial-gradient(circle at 27% 16%,white,#d5dce5 60%,#8b9cac);color:#41566b;border-color:#99a6b4}
 .tile.bronze{background:radial-gradient(circle at 27% 16%,#fff1dd,#ce8d5d 60%,#92532c);color:#693c23;border-color:#aa6e43}
 .tile.white{background:radial-gradient(circle at 27% 16%,white,#f5f6f7 60%,#d0d8de);color:#495667;border-color:#b4bec9}
-.tile.active{transform:translateY(-6px) scale(1.12);box-shadow:0 5px 0 #799af5,inset 0 4px 9px #fff7}
+.tile.active{transform:translateY(-6px) scale(1.12);box-shadow:0 5px 0 #7ab9a1,inset 0 4px 9px #fff7}
 .controls{display:flex;gap:9px}.controls button{border:0;border-radius:13px;padding:13px 11px;font-weight:800;font-size:14px;cursor:pointer}
-#play{flex:1;background:#305fa7;color:white}#stop{background:#f1f3f7;color:#3d5167;min-width:78px}
+#play{flex:1;background:#287466;color:white}#stop{background:#ffffff;color:#245a4b;border:1px solid #9bb6a8;min-width:78px}
 #status{text-align:center;color:#66758a;font-size:12px;min-height:23px;padding:8px 0}
 </style></head><body><div class="panel">
 <div class="tiles" id="tiles" aria-label="スタンプの読み上げ順"></div>
@@ -466,6 +466,51 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .st-key-cm_account_mode [data-testid="stRadioOption"]{white-space:nowrap!important;flex-shrink:0;min-height:44px;padding:8px 10px;border:1px solid #bacbc1;border-radius:12px;background:#ffffff}
 .st-key-cm_account_mode [data-testid="stRadioOption"] p{white-space:nowrap!important;word-break:keep-all}
 .st-key-cm_account_mode [data-testid="stRadioOption"]:has(input:checked){background:#e5efe8;border-color:#287466}
+
+/* Shared control palette: all pages use the same light surfaces and green actions. */
+.stApp [data-testid="stButton"] button,
+.stApp [data-testid="stFormSubmitButton"] button{background:#ffffff!important;border:1px solid #9bb6a8!important;color:#245a4b!important;border-radius:12px;min-height:44px}
+.stApp [data-testid="stButton"] button p,.stApp [data-testid="stButton"] button span,
+.stApp [data-testid="stFormSubmitButton"] button p{color:inherit!important;-webkit-text-fill-color:currentColor!important}
+.stApp [data-testid="stButton"] button:hover:not(:disabled){background:#e5efe8!important;border-color:#287466!important}
+.stApp [data-testid="stButton"] button[kind="primary"],
+.stApp [data-testid="stFormSubmitButton"] button[kind="primary"]{background:#287466!important;color:#ffffff!important;border-color:#287466!important}
+.stApp [data-testid="stButton"] button:disabled,
+.stApp [data-testid="stFormSubmitButton"] button:disabled{background:#edf1ee!important;color:#61756e!important;border-color:#cedbd3!important;opacity:1}
+.stApp [class*="st-key-nav_"] button{background:transparent!important;color:#526b60!important;border-color:transparent!important}
+.stApp [class*="st-key-nav_"] button[kind="primary"]{background:#e5efe8!important;color:#225b4e!important;border-color:transparent!important}
+.stApp [data-testid="stDateInput"] [data-baseweb="input"],
+.stApp [data-testid="stDateInput"] [data-baseweb="base-input"]{background:#ffffff!important;color:#233c3c!important;border-color:#bacbc1!important;color-scheme:light}
+.stApp [data-testid="stDateInput"] input{background:#ffffff!important;color:#233c3c!important;-webkit-text-fill-color:#233c3c!important;caret-color:#233c3c!important}
+.stApp [data-testid="stDateInput"] svg,.stApp [data-testid="stDateInput"] button{color:#425f52!important}
+[data-baseweb="calendar"],[data-baseweb="calendar"] [role="grid"],
+[data-baseweb="calendar"] [role="row"],[data-baseweb="calendar"] [role="gridcell"],
+[data-baseweb="calendar"] button{background:#ffffff!important;color:#233c3c!important}
+[data-baseweb="calendar"] [aria-selected="true"],[data-baseweb="calendar"] [aria-selected="true"] button{background:#287466!important;color:#ffffff!important}
+[data-baseweb="calendar"] button:disabled,[data-baseweb="calendar"] [aria-disabled="true"]{color:#83988b!important}
+[data-baseweb="calendar"] [data-baseweb="select"],[data-baseweb="calendar"] [data-baseweb="select"] div{background:#ffffff!important;color:#233c3c!important}
+[data-baseweb="popover"] [role="listbox"],[data-baseweb="popover"] [role="option"]{background:#ffffff!important;color:#233c3c!important}
+[data-baseweb="popover"] [role="option"][aria-selected="true"]{background:#e5efe8!important;color:#225b4e!important}
+.stApp [data-testid="stExpander"] details{background:#ffffff!important;color:#233c3c!important;border-color:#d6e1da!important}
+.stApp [data-testid="stExpander"] summary,.stApp [data-testid="stExpander"] summary p,
+.stApp [data-testid="stExpander"] summary span{color:#233c3c!important;-webkit-text-fill-color:#233c3c!important}
+.stApp [data-testid="stMarkdownContainer"]>p{color:#233c3c}
+.stApp [data-testid="stAlert"]{background:#edf5f3;color:#245a4b}
+.stApp [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p{color:#245a4b!important;-webkit-text-fill-color:#245a4b!important}
+.cm-stamp-totals{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:4px 0 12px}
+.cm-total{display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 3px;background:#ffffff;border:1px solid #d6e1da;border-radius:12px;color:#233c3c}
+.cm-total span{font-size:12px;line-height:1.4;color:#526b60}
+.cm-total strong{font-size:22px;line-height:1.4;color:#233c3c}
+.cm-stamp-grid{grid-template-columns:repeat(5,minmax(0,1fr));grid-auto-flow:row;align-content:start;align-items:start;justify-items:start;height:auto;min-height:0;grid-auto-rows:auto;margin:0;padding:8px 0 18px}
+.cm-stamp-item{width:100%;margin:0;align-self:start}
+@media(max-width:640px){.cm-stamp-totals{gap:5px;margin-bottom:8px}.cm-total{padding:7px 2px}.cm-total strong{font-size:19px}.cm-stamp-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:18px 8px}.cm-stamp-category{font-size:12px;white-space:normal;line-height:1.5}.cm-stamp-meta{font-size:10px;line-height:1.5}}
+
+[data-baseweb="calendar"] span,[data-baseweb="calendar"] div{color:#233c3c!important;-webkit-text-fill-color:#233c3c!important}
+[data-baseweb="calendar"] [aria-selected="true"],[data-baseweb="calendar"] [aria-selected="true"] *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
+[data-baseweb="popover"] [role="option"] *{color:#233c3c!important;-webkit-text-fill-color:#233c3c!important}
+.stApp [data-testid="stAlert"] [data-testid="stAlertContainer"]{background:#edf5f3!important}
+.stApp .st-key-cm_account_form [data-testid="stAlert"] [data-testid="stMarkdownContainer"],
+.stApp .st-key-cm_account_form [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p{color:#842c20!important;-webkit-text-fill-color:#842c20!important}
 </style>
 """
 
@@ -595,12 +640,12 @@ def render_stamp_book(rows: list[dict], target_day: date, truncated: bool) -> No
                     unsafe_allow_html=True)
         return
     counts = {grade: sum(1 for r in rows if normalize_grade(r.get("grade")) == grade) for grade in GRADE_NAMES}
-    numbers = st.columns(5, gap="small")
-    for col, (label, value) in zip(numbers, (("合計", len(rows)), ("金", counts["gold"]),
-                                           ("銀", counts["silver"]), ("銅", counts["bronze"]),
-                                           ("白", counts["white"]))):
-        with col:
-            st.metric(label, value, border=True)
+    totals = (("合計", len(rows)), ("金", counts["gold"]), ("銀", counts["silver"]),
+              ("銅", counts["bronze"]), ("白", counts["white"]))
+    summary = '<div class="cm-stamp-totals">' + "".join(
+        f'<div class="cm-total"><span>{label}</span><strong>{value}</strong></div>'
+        for label, value in totals) + '</div>'
+    st.markdown(summary, unsafe_allow_html=True)
     if truncated:
         st.warning("この日は記録が非常に多いため、先頭1万件まで表示しています。")
     st.markdown(stamp_grid_html(rows), unsafe_allow_html=True)
