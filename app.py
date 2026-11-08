@@ -922,8 +922,8 @@ def cm_account_username(value):
 
 def cm_password_hash(password, salt=None):
     import secrets
-    if not isinstance(password, str) or not 8 <= len(password) <= 128:
-        raise ValueError("パスワードは8〜128文字で入力してください。")
+    if not isinstance(password, str) or not 4 <= len(password) <= 128:
+        raise ValueError("パスワードは4〜128文字で入力してください。")
     salt = salt or secrets.token_hex(16)
     digest = hashlib.scrypt(password.encode("utf-8"), salt=bytes.fromhex(salt),
                             n=16384, r=8, p=1, dklen=32).hex()
@@ -978,8 +978,8 @@ def cm_register_account(username, password, confirmation, legacy_token=None):
     name = cm_account_username(username)
     if password != confirmation:
         raise ValueError("確認用パスワードが一致していません。もう一度入力してください。")
-    if not isinstance(password, str) or not 8 <= len(password) <= 128:
-        raise ValueError("パスワードは8〜128文字で入力してください。")
+    if not isinstance(password, str) or not 4 <= len(password) <= 128:
+        raise ValueError("パスワードは4〜128文字で入力してください。")
     bucket = cm_account_gate(name)
     encoded = cm_password_hash(password)
     legacy_hash = None
@@ -1064,9 +1064,9 @@ def cm_account_form(legacy_token):
             username = st.text_input("ユーザー名", key="cm_signup_username" if signup else "cm_login_username",
                                      placeholder="例：rinmaru", max_chars=32,
                                      help="半角英数字3〜32文字。「_」「-」「.」も使えます。大文字と小文字は区別しません。")
-            password = st.text_input("パスワード（8文字以上）" if signup else "パスワード", type="password", max_chars=128,
+            password = st.text_input("パスワード（4文字以上）" if signup else "パスワード", type="password", max_chars=128,
                                      key="cm_signup_password" if signup else "cm_login_password",
-                                     help="8文字以上。入力欄の目のマークで確認できます。" if signup else None)
+                                     help="4文字以上。入力欄の目のマークで確認できます。" if signup else None)
             confirmation = st.text_input("パスワード（確認用）", type="password", max_chars=128,
                                          key="cm_signup_confirmation") if signup else None
             submitted = st.form_submit_button("登録してはじめる" if signup else "ログインする",
