@@ -55,6 +55,211 @@ APP_DEFINITIONS = (
 )
 
 
+# Local diagnostics: bounded timing/error metadata; never request bodies or credentials.
+CM_DIAG_LIMIT = 2000
+CM_DIAG_VERSION = 'operation-log-1'
+
+
+def cm_diag_state():
+    import uuid
+    if 'cm_diag_state' not in st.session_state:
+        st.session_state['cm_diag_state'] = {'session':str(uuid.uuid4()),'seq':0,'records':[],
+            'dropped':0,'controls':{},'pending':None}
+    return st.session_state['cm_diag_state']
+
+
+def cm_diag_scrub(value):
+    import re
+    text = str(value)
+    # Redact known form contents as well as conventional token and identifier formats.
+    for key in list(st.session_state):
+        if any(k in key.lower() for k in ('password','confirmation','username','token','cm_change_current','cm_change_new')):
+            secret = st.session_state.get(key)
+            if isinstance(secret,str) and secret:
+                text = text.replace(secret,'[redacted]')
+    for name in ('SUPABASE_SERVICE_ROLE_KEY','SUPABASE_SECRET_KEY','SUPABASE_KEY','SUPABASE_PUBLISHABLE_KEY'):
+        secret = _setting(name)
+        if secret:
+            text = text.replace(secret,'[redacted]')
+    text = re.sub(r'https?://[^\s<>"\']+', '[url]', text)
+    text = re.sub(r'(?i)bearer\s+\S+|sb_(?:secret|publishable)_\S+|eyJ[\w.-]+', '[token]', text)
+    text = re.sub(r'(?i)\b[a-f0-9]{32,}\b|\b[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\b', '[id]', text)
+    text = re.sub(r'[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}', '[email]', text)
+    return text[:400]
+
+
+def cm_diag_page():
+    return str(st.session_state.get('cm_page','home')) if st.session_state.get('cm_profile') else 'login'
+
+
+def cm_diag_record(kind, action, *, duration_ms=None, status='ok', error=None, **fields):
+    """Allowlisted structure only; avoid adding an arbitrary payload/locals field."""
+    import uuid
+    d = cm_diag_state(); d['seq'] += 1
+    row = {'id':str(uuid.uuid4()),'session':d['session'],'seq':d['seq'],
+        'at':datetime.now(timezone.utc).isoformat(),'origin':'server','kind':kind,'action':action,'status':status}
+    if d.get('pending'):
+        row['trace_id'] = d['pending']['id']
+    if duration_ms is not None:
+        row['duration_ms'] = round(max(0,float(duration_ms)),2)
+    for key in ('http_status','method','endpoint','row_count','page','frame','line','provider_code'):
+        if key in fields and isinstance(fields[key],(str,int,float,bool)):
+            row[key] = fields[key]
+    if error is not None:
+        row['error_type'] = type(error).__name__
+        row['message'] = cm_diag_scrub(error)
+        import re,traceback
+        match = re.search(r'HTTP\s+(\d{3})',str(error))
+        if match:
+            row['http_status'] = int(match[1])
+        # Function names and line numbers only; no source text, paths, or local variables.
+        row['frames'] = [{'function':f.name,'line':f.lineno} for f in traceback.extract_tb(error.__traceback__)[-5:]]
+    d['records'].append(row)
+    if len(d['records'])>CM_DIAG_LIMIT:
+        count = len(d['records'])-CM_DIAG_LIMIT
+        del d['records'][:count]; d['dropped'] += count
+    return row
+
+
+def cm_diag_http_error(error, action):
+    import re
+    code = None; message = 'HTTP応答エラー'
+    try:
+        body = json.loads(error.read(32768))
+        if isinstance(body,dict):
+            candidate = body.get('code') or body.get('error_code')
+            if isinstance(candidate,str) and re.fullmatch(r'[A-Za-z0-9_]{1,80}',candidate):
+                code = candidate
+            if isinstance(body.get('message'),str):
+                message = body['message']
+    except Exception:
+        pass
+    fields = {'http_status':int(error.code)}
+    if code:
+        fields['provider_code'] = code
+    cm_diag_record('http_error',action,status='error',error=RuntimeError(message),**fields)
+
+
+def cm_diag_begin_action(key):
+    import uuid,time
+    d = cm_diag_state()
+    if d.get('pending'):
+        cm_diag_record('action_interrupted',d['pending']['action'],status='superseded')
+    d['pending'] = {'id':str(uuid.uuid4()),'action':key,'start':time.perf_counter()}
+    cm_diag_record('action_received',key)
+
+
+def cm_diag_button_impl(function, label, *args, **kwargs):
+    import hashlib
+    key = kwargs.get('key') or 'cm_control_'+hashlib.sha256(str(label).encode()).hexdigest()[:12]
+    kwargs['key'] = key
+    # Labels are application constants, never account names or form values.
+    cm_diag_state()['controls'][str(key)] = str(label)[:60]
+    callback = kwargs.pop('on_click',None)
+    callback_args = kwargs.pop('args',None) or ()
+    callback_kwargs = kwargs.pop('kwargs',None) or {}
+    def clicked():
+        cm_diag_begin_action(str(key))
+        if callable(callback):
+            try:
+                callback(*callback_args,**callback_kwargs)
+            except Exception as exc:
+                cm_diag_record('callback_error',str(key),status='error',error=exc)
+                raise
+    return function(label,*args,on_click=clicked,**kwargs)
+
+
+def cm_button(label,*args,**kwargs):
+    return cm_diag_button_impl(st.button,label,*args,**kwargs)
+
+
+def cm_form_submit_button(label,*args,**kwargs):
+    return cm_diag_button_impl(st.form_submit_button,label,*args,**kwargs)
+
+
+def cm_error(body,*args,**kwargs):
+    cm_diag_record('displayed_error','ui',status='error',error=RuntimeError(str(body)))
+    return st.error(body,*args,**kwargs)
+
+
+def cm_diag_trace(name):
+    from functools import wraps
+    import time
+    def decorate(function):
+        @wraps(function)
+        def traced(*args,**kwargs):
+            began = time.perf_counter(); status = 'ok'; error = None; extra = {}
+            if name=='cm_api_request':
+                method = args[1] if len(args)>1 else kwargs.get('method','')
+                path = args[2] if len(args)>2 else kwargs.get('path','')
+                # Parameters, URLs, headers and bodies are intentionally excluded.
+                extra={'method':str(method)[:8], 'endpoint':str(path).split('?')[0][:100]}
+            try:
+                result = function(*args,**kwargs)
+                if name in ('cm_api_request','fetch_day') and isinstance(result,list):
+                    extra['row_count'] = len(result)
+                return result
+            except Exception as exc:
+                status='error'; error=exc
+                raise
+            finally:
+                cm_diag_record('operation',name,duration_ms=(time.perf_counter()-began)*1000,
+                               status=status,error=error,**extra)
+        return traced
+    return decorate
+
+
+def cm_diag_mark_ready():
+    import time,uuid
+    d = cm_diag_state(); pending = d.get('pending')
+    if st.session_state.get('cm_diag_rendering_full'):
+        return
+    if not pending:
+        return
+    cm_diag_record('server_ready',pending['action'],
+                   duration_ms=(time.perf_counter()-pending['start'])*1000,
+                   page=cm_diag_page())
+    marker = {'run':str(uuid.uuid4()),'action':pending['action'],'trace':pending['id']}
+    st.markdown('<span class="cm-diagnostic-ready" style="display:none" data-cm-ready="'+
+                html.escape(json.dumps(marker),quote=True)+'"></span>',unsafe_allow_html=True)
+    d['pending'] = None
+
+
+def cm_diag_bridge(show_download=False):
+    d = cm_diag_state()
+    settings = show_download
+    snapshot = d['records'] if settings else d['records'][-80:]
+    cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
+        server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
+        show_download=settings, page=cm_diag_page(),
+        app_version='17', default=None)
+
+
+def cm_diag_run(function):
+    from functools import wraps
+    import time
+    @wraps(function)
+    def run(*args,**kwargs):
+        began=time.perf_counter()
+        st.session_state['cm_diag_rendering_full'] = True
+        try:
+            result=function(*args,**kwargs)
+        except Exception as exc:
+            cm_diag_record('unhandled_error','app',status='error',error=exc)
+            st.session_state['cm_diag_rendering_full'] = False
+            cm_diag_mark_ready(); cm_diag_bridge()
+            raise
+        else:
+            st.session_state['cm_diag_rendering_full'] = False
+            cm_diag_record('render','app',duration_ms=(time.perf_counter()-began)*1000,
+                           page=cm_diag_page())
+            cm_diag_mark_ready(); cm_diag_bridge()
+            return result
+        finally:
+            st.session_state['cm_diag_rendering_full'] = False
+    return run
+
+
 def now_jst() -> datetime:
     return datetime.now(TOKYO)
 
@@ -126,9 +331,11 @@ def fetch_day(url: str, public_key: str, profile_id: str, target_day: date, acce
             with urlopen(req, timeout=9) as resp:
                 batch = json.loads(resp.read().decode("utf-8"))
         except HTTPError as exc:
+            cm_diag_http_error(exc, 'fetch_day')
             # Never surface the full response body or credentials to a user.
             raise RuntimeError(f"Supabaseから取得できませんでした（HTTP {exc.code}）") from None
         except (URLError, TimeoutError, OSError) as exc:
+            cm_diag_record('network_error','fetch_day',status='error',error=exc)
             raise RuntimeError("Supabaseへの通信に失敗しました。接続設定をご確認ください。") from None
         except (ValueError, UnicodeError, json.JSONDecodeError):
             raise RuntimeError("Supabaseからのデータ形式を確認できませんでした。") from None
@@ -535,6 +742,8 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .st-key-cm_age_stepper [data-testid="stNumberInputStepUp"]{display:none!important}
 .st-key-cm_age_stepper [data-testid="stNumberInput"] input{min-height:44px!important}
 .st-key-cm_age_stepper [data-testid="stButton"] button{min-width:44px!important;min-height:44px!important;padding:0!important;font-size:20px}
+.st-key-cm_home_heading [data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:minmax(0,1fr) 88px;gap:10px!important;align-items:center}
+.st-key-cm_home_heading [data-testid="stColumn"]{width:100%!important;min-width:0!important}
 </style>
 """
 
@@ -551,7 +760,7 @@ def render_navigation() -> None:
     labels = (("home", "ホーム"), ("today", "今日の成果"), ("history", "過去のスタンプ"))
     for col, (page, label) in zip(cols, labels):
         with col:
-            if st.button(label, key="nav_" + page, use_container_width=True,
+            if cm_button(label, key="nav_" + page, use_container_width=True,
                          type="primary" if st.session_state.cm_page == page else "secondary"):
                 if page == "today":
                     _open_today()
@@ -611,6 +820,54 @@ def _make_launch_link(app: dict) -> str:
     return link
 
 
+def cm_prepare_launch_links(apps):
+    """Prepare all missing one-use tickets with one insert; publish only after success."""
+    import secrets
+    profile = st.session_state.get('cm_profile')
+    if not profile:
+        raise RuntimeError('利用者の連携を準備しています')
+    now = datetime.now(timezone.utc)
+    links, pending, payload, seen = {}, {}, [], set()
+    for app in apps:
+        source = app['id']
+        if not app.get('ready') or source in seen:
+            continue
+        seen.add(source)
+        if source not in CM_SOURCE_KEYS or not _valid_https_url(app['url']):
+            continue
+        cache = st.session_state.get('cm_link_' + source)
+        if (cache and cache.get('profile')==profile and cache.get('url')==app['url']
+                and cache['expiry']>now+timedelta(seconds=70)):
+            links[source] = cache['link']
+            continue
+        code = secrets.token_urlsafe(32)
+        expiry = now+timedelta(seconds=CM_TICKET_SECONDS)
+        payload.append({'ticket_hash':hashlib.sha256(code.encode()).hexdigest(),
+            'profile_id':profile,'source_app':source,'expires_at':expiry.isoformat()})
+        pending[source] = {'profile':profile,'url':app['url'],
+            'link':cm_launch_url(app['url'],code),'expiry':expiry}
+    if payload:
+        url,key = cm_service_config()
+        cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,
+                       payload=payload,prefer='return=minimal')
+        for source, cache in pending.items():
+            st.session_state['cm_link_'+source] = cache
+            links[source] = cache['link']
+    return links
+
+
+def cm_launch_connection_hints(apps):
+    """Prepare only origin connections; never preload a one-use launch URL."""
+    origins = set()
+    for app in apps:
+        if app.get('ready') and _valid_https_url(app['url']):
+            parsed = urlparse(app['url'])
+            origins.add(parsed.scheme+'://'+parsed.netloc)
+    return ''.join('<link rel="dns-prefetch" href="'+html.escape(origin,quote=True)+'">'
+                   '<link rel="preconnect" href="'+html.escape(origin,quote=True)+'">'
+                   for origin in sorted(origins))
+
+
 def home_cards_html(apps: list[dict]) -> str:
     """One native anchor per subject, kept side-by-side at phone widths."""
     labels = {"kotoba": "こくご", "soroban": "そろばん", "geometry": "ずけい"}
@@ -619,6 +876,11 @@ def home_cards_html(apps: list[dict]) -> str:
         "soroban": '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="10" width="52" height="44" rx="5" fill="currentColor" opacity=".12"/><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 10h52v44H6ZM7 28h50M19 14v36m13-36v36m13-36v36"/></g><g fill="currentColor"><path d="m12 21 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5ZM12 35l7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Z"/></g></svg>',
         "geometry": '<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="21" cy="23" r="14" fill="currentColor" opacity=".18"/><circle cx="21" cy="23" r="14" stroke="currentColor" stroke-width="3" fill="none"/><path d="m38 14 20 34H18Z" fill="currentColor" opacity=".3"/><path d="m38 14 20 34H18Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M8 40h19v17H8Z" fill="currentColor" opacity=".65"/></svg>',
     }
+    try:
+        links = cm_prepare_launch_links(apps)
+    except (RuntimeError, ValueError):
+        # A failed batch is not followed by three more sequential network retries.
+        links = {}
     cards = []
     for app in apps:
         app_id = app["id"]
@@ -629,7 +891,9 @@ def home_cards_html(apps: list[dict]) -> str:
                 f'<span class="cm-subject-label">{html.escape(label)}</span>')
         if app["ready"]:
             try:
-                link = _make_launch_link(app)
+                link = links.get(app_id)
+                if not link:
+                    raise RuntimeError("起動リンクの準備に失敗しました")
                 cards.append(f'<a class="cm-subject cm-subject-{html.escape(app_id)}" '
                              f'href="{html.escape(link, quote=True)}" target="_blank" rel="noopener noreferrer" '
                              f'aria-label="{html.escape(app["title"], quote=True)}を別タブで開く">'
@@ -639,22 +903,31 @@ def home_cards_html(apps: list[dict]) -> str:
                 pass
         cards.append(f'<div class="cm-subject cm-subject-{html.escape(app_id)} cm-subject-disabled" '
                      f'aria-disabled="true">{body}<span class="cm-subject-go">じゅんび中</span></div>')
-    return '<div class="cm-subject-grid">' + "".join(cards) + '</div>'
+    return cm_launch_connection_hints(apps) + '<div class="cm-subject-grid">' + "".join(cards) + '</div>'
 
 
 def render_home(apps: list[dict]) -> None:
-    st.markdown('<h2 class="cm-home-question">なにを まなぶ？</h2>', unsafe_allow_html=True)
+    with st.container(key="cm_home_heading"):
+        heading, settings_button = st.columns([5, 1], gap="small", vertical_alignment="center")
+        with heading:
+            st.markdown('<h2 class="cm-home-question">なにを まなぶ？</h2>', unsafe_allow_html=True)
+        with settings_button:
+            if cm_button("設定", key="cm_home_settings", use_container_width=True):
+                st.session_state.cm_page = "settings"
+                st.rerun()
     @st.fragment(run_every=60)
     def launch_cards():
         st.markdown(home_cards_html(apps), unsafe_allow_html=True)
+        cm_diag_mark_ready()
     launch_cards()
     @st.fragment(run_every=60)
     def daily_assignments():
         render_daily_plan(apps)
+        cm_diag_mark_ready()
     daily_assignments()
     with st.container(border=True, key="home_progress"):
         st.markdown('<div class="cm-progress-heading"><span>✦</span>きょうの がんばり</div>', unsafe_allow_html=True)
-        if st.button("今日の成果を確認する", key="home_today", type="primary", use_container_width=True):
+        if cm_button("今日の成果を確認する", key="home_today", type="primary", use_container_width=True):
             _open_today()
             st.rerun()
     st.caption("学習アプリは別のタブで開きます。")
@@ -695,7 +968,7 @@ def render_today(url: str, key: str, profile: str, missing: list[str]) -> None:
     st.markdown('<div class="cm-page-heading">今日の成果</div>', unsafe_allow_html=True)
     today = now_jst().date()
     st.markdown(f'<div class="cm-note">{html.escape(date_label(today))} · 日本時間</div>', unsafe_allow_html=True)
-    if st.button("最新のスタンプを読み込む", key="refresh_today", use_container_width=True):
+    if cm_button("最新のスタンプを読み込む", key="refresh_today", use_container_width=True):
         st.session_state.cm_today_requested = True
         st.session_state.cm_today_loaded_for = None
     if not st.session_state.get("cm_today_requested"):
@@ -704,7 +977,7 @@ def render_today(url: str, key: str, profile: str, missing: list[str]) -> None:
     with st.spinner("スタンプを確認しています…"):
         _load_today_if_requested(url, key, profile, missing)
     if st.session_state.get("cm_today_error"):
-        st.error(st.session_state.cm_today_error)
+        cm_error(st.session_state.cm_today_error)
         return
     rows = st.session_state.get("cm_today_rows")
     if rows is not None:
@@ -718,7 +991,7 @@ def render_history(url: str, key: str, profile: str, missing: list[str]) -> None
     previous = today - timedelta(days=1)
     chosen = st.date_input("見たい日をえらぶ", value=previous, max_value=today,
                            key="cm_history_picker")
-    if st.button("この日のスタンプを見る", key="load_history", use_container_width=True):
+    if cm_button("この日のスタンプを見る", key="load_history", use_container_width=True):
         st.session_state.cm_history_loaded_for = None
         st.session_state.cm_history_requested_for = chosen
     requested = st.session_state.get("cm_history_requested_for")
@@ -727,7 +1000,7 @@ def render_history(url: str, key: str, profile: str, missing: list[str]) -> None
         return
     if st.session_state.get("cm_history_loaded_for") != chosen:
         if missing:
-            st.error("Supabase接続設定が不足しています。")
+            cm_error("Supabase接続設定が不足しています。")
             return
         with st.spinner("スタンプを確認しています…"):
             try:
@@ -740,7 +1013,7 @@ def render_history(url: str, key: str, profile: str, missing: list[str]) -> None
                 st.session_state.cm_history_rows = None
         st.session_state.cm_history_loaded_for = chosen
     if st.session_state.get("cm_history_error"):
-        st.error(st.session_state.cm_history_error)
+        cm_error(st.session_state.cm_history_error)
         return
     rows = st.session_state.get("cm_history_rows")
     if rows is not None:
@@ -861,8 +1134,10 @@ def cm_api_request(url, method, path, *, key, token=None, payload=None, params=N
             raw=response.read()
             return json.loads(raw) if raw else None
     except HTTPError as e:
+        cm_diag_http_error(e, 'cm_api_request')
         raise RuntimeError(f'通信に失敗しました（HTTP {e.code}）') from None
-    except (URLError,TimeoutError,OSError):
+    except (URLError,TimeoutError,OSError) as exc:
+        cm_diag_record('network_error','cm_api_request',status='error',error=exc)
         raise RuntimeError('接続を確認してください') from None
 
 
@@ -1142,6 +1417,11 @@ def render_settings():
     st.caption("ユーザー名：" + st.session_state.get("cm_account_username", ""))
     if changed:
         st.success("パスワードを変更しました。次回から新しいパスワードでログインできます。")
+    with st.container(border=True, key="cm_operation_log_card"):
+        st.markdown("**動作ログ**")
+        st.caption("操作時間・通信時間・エラーをJSON形式で保存できます。")
+        cm_diag_bridge(show_download=True)
+        st.caption("直近2,000件を記録します。クリックから表示までは描画の目安です。学習アプリ内部の表示時間は含みません。")
     render_plan_age()
     # Share the existing account card and widget styles in both browser themes.
     with st.container(border=True, key="cm_account_form"):
@@ -1154,7 +1434,7 @@ def render_settings():
                                 key="cm_change_new", help="4〜128文字。目のマークで入力を確認できます。")
             confirmation = st.text_input("新しいパスワード（確認用）", type="password", max_chars=128,
                                          key="cm_change_confirmation")
-            submitted = st.form_submit_button("パスワードを変更", type="primary", use_container_width=True)
+            submitted = cm_form_submit_button("パスワードを変更", type="primary", use_container_width=True)
         if submitted:
             try:
                 with st.spinner("変更しています…"):
@@ -1162,11 +1442,11 @@ def render_settings():
                 st.session_state["cm_password_changed"] = True
                 st.rerun()
             except ValueError as exc:
-                st.error(str(exc))
+                cm_error(str(exc))
             except RuntimeError:
-                st.error("変更結果を確認できませんでした。新しいパスワードでログインできるか確認してください。")
+                cm_error("変更結果を確認できませんでした。新しいパスワードでログインできるか確認してください。")
         st.caption("変更すると、ほかの端末のちょこまなでは再ログインが必要になります。")
-    if st.button("ホームへ戻る", key="cm_settings_home", use_container_width=True):
+    if cm_button("ホームへ戻る", key="cm_settings_home", use_container_width=True):
         st.session_state.cm_page = "home"
         st.rerun()
 
@@ -1214,7 +1494,7 @@ def cm_account_form(legacy_token):
                                      help="4文字以上。入力欄の目のマークで確認できます。" if signup else None)
             confirmation = st.text_input("パスワード（確認用）", type="password", max_chars=128,
                                          key="cm_signup_confirmation") if signup else None
-            submitted = st.form_submit_button("登録してはじめる" if signup else "ログインする",
+            submitted = cm_form_submit_button("登録してはじめる" if signup else "ログインする",
                                                type="primary", use_container_width=True)
         if submitted:
             try:
@@ -1226,9 +1506,9 @@ def cm_account_form(legacy_token):
                 st.session_state["cm_account_clear_fields"] = True
                 st.rerun()
             except ValueError as exc:
-                st.error(str(exc))
+                cm_error(str(exc))
             except RuntimeError:
-                st.error("接続できませんでした。入力はそのままで、もう一度お試しください。")
+                cm_error("接続できませんでした。入力はそのままで、もう一度お試しください。")
         st.caption("ユーザー名とパスワードを保管してください。メールでの再設定はありません。")
         if signup and legacy_token:
             st.caption("このブラウザに未登録の学習履歴があれば、登録時に引き継ぎます。")
@@ -1256,8 +1536,8 @@ def cm_hub_identity():
         try:
             account = cm_restore_account(token)
         except RuntimeError:
-            st.error("ログイン状態を確認できませんでした。もう一度お試しください。")
-            if st.button("再試行", key="cm_account_retry"):
+            cm_error("ログイン状態を確認できませんでした。もう一度お試しください。")
+            if cm_button("再試行", key="cm_account_retry"):
                 st.rerun()
             return False
         if not account:
@@ -1276,16 +1556,16 @@ def cm_hub_identity():
         st.caption("このブラウザではログインを保存できません。次回もユーザー名とパスワードでログインできます。")
     with st.expander(account["username"] + " さん（アカウント）"):
         st.caption("このブラウザでは次回から自動ログインします。別の人が使うときはログアウトしてください。")
-        if st.button("設定・パスワード変更", key="cm_open_settings", use_container_width=True):
+        if cm_button("設定・パスワード変更", key="cm_open_settings", use_container_width=True):
             st.session_state.cm_page = "settings"
             st.rerun()
-        if st.button("ログアウト", key="cm_account_logout", use_container_width=True):
+        if cm_button("ログアウト", key="cm_account_logout", use_container_width=True):
             try:
                 cm_account_request("PATCH", "/rest/v1/chokomana_account_sessions",
                                    {"expires_at": datetime.now(timezone.utc).isoformat()},
                                    {"token_hash": "eq." + hashlib.sha256(token.encode()).hexdigest()}, "return=minimal")
             except RuntimeError:
-                st.error("ログアウトできませんでした。接続を確認して再試行してください。")
+                cm_error("ログアウトできませんでした。接続を確認して再試行してください。")
                 return False
             cm_clear_account_state()
             cm_queue_account_command(None)
@@ -1413,7 +1693,7 @@ def render_plan_age():
     try:
         age = cm_plan_settings()
     except RuntimeError:
-        st.error('年齢の設定を読み込めませんでした。接続を確認して再試行してください。')
+        cm_error('年齢の設定を読み込めませんでした。接続を確認して再試行してください。')
         return
     if 'cm_plan_age_input' not in st.session_state:
         st.session_state['cm_plan_age_input'] = age
@@ -1428,24 +1708,24 @@ def render_plan_age():
                     value=None, step=1, placeholder='年齢を入れてね！', key='cm_plan_age_input',
                     label_visibility='collapsed')
             with minus:
-                st.button('−', key='cm_plan_age_minus', help='年齢を1歳減らす',
+                cm_button('−', key='cm_plan_age_minus', help='年齢を1歳減らす',
                           on_click=cm_step_plan_age, args=(-1,), use_container_width=True)
             with plus:
-                st.button('＋', key='cm_plan_age_plus', help='年齢を1歳増やす',
+                cm_button('＋', key='cm_plan_age_plus', help='年齢を1歳増やす',
                           on_click=cm_step_plan_age, args=(1,), use_container_width=True)
         st.caption('1日の目安は年齢×10分。例：5歳なら50分です。')
-        save = st.button('年齢を保存', key='cm_plan_age_save', type='primary', use_container_width=True)
+        save = cm_button('年齢を保存', key='cm_plan_age_save', type='primary', use_container_width=True)
         if save:
             if chosen is None:
-                st.error('年齢を入れてね！')
+                cm_error('年齢を入れてね！')
                 return
             try:
                 cm_save_plan_age(chosen)
                 st.rerun()
             except ValueError as exc:
-                st.error(str(exc))
+                cm_error(str(exc))
             except RuntimeError:
-                st.error('保存できませんでした。もう一度お試しください。')
+                cm_error('保存できませんでした。もう一度お試しください。')
 
 
 def cm_plan_date(value):
@@ -1785,13 +2065,13 @@ def render_daily_plan(apps):
         try:
             age = cm_plan_settings()
         except RuntimeError:
-            st.error('学習設定を読み込めませんでした。')
+            cm_error('学習設定を読み込めませんでした。')
             return
         if age is None:
             st.info('年齢を設定すると、今日やる学習を自動で選びます。')
             render_plan_age()
             return
-        refresh = st.button('学習記録を更新',key='cm_plan_refresh',use_container_width=True)
+        refresh = cm_button('学習記録を更新',key='cm_plan_refresh',use_container_width=True)
         cached = st.session_state.get('cm_plan_snapshot')
         cache_key = (st.session_state['cm_profile'],now_jst().date().isoformat(),age)
         if refresh or not cached or cached['key']!=cache_key or time.time()-cached['at']>60:
@@ -1801,7 +2081,7 @@ def render_daily_plan(apps):
                 cached = {'key':cache_key,'at':time.time(),'payload':payload}
                 st.session_state['cm_plan_snapshot']=cached
             except (RuntimeError,ValueError,KeyError,TypeError):
-                st.error('学習記録を読み込めませんでした。「学習記録を更新」で再試行してください。')
+                cm_error('学習記録を読み込めませんでした。「学習記録を更新」で再試行してください。')
                 st.caption('読み込みに失敗した記録を、未学習として扱うことはありません。')
                 return
         p = cached['payload']
@@ -1821,7 +2101,7 @@ def render_daily_plan(apps):
                         try:
                             st.link_button(app['title']+'を開く ↗',_make_launch_link(app),use_container_width=True)
                         except (RuntimeError,ValueError):
-                            st.error(app['title']+'の起動リンクを作れませんでした。')
+                            cm_error(app['title']+'の起動リンクを作れませんでした。')
                     else:
                         st.warning(app['title']+'のURLが未設定です。接続設定を確認してください。')
             st.caption('アプリを開き、一覧の「えらぶ順」で単元を選んでください。単元への直接起動には未対応です。')
@@ -1839,5 +2119,116 @@ def render_daily_plan(apps):
             st.caption('学習ログから判定する適応型モデルです。生成AIへのデータ送信やAPIの追加料金はありません。画面外での助力や内面の理解は断定しません。')
 
 
+def cm_diag_html():
+    return r'''<!doctype html><html lang="ja"><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}body{margin:0;background:transparent;color:#233c3c;font:14px system-ui,-apple-system,'Noto Sans JP',sans-serif}
+button{width:100%;min-height:48px;padding:10px 16px;border:1px solid #287466;border-radius:12px;background:#287466;color:white;font-family:inherit;font-size:15px;font-weight:700;cursor:pointer}
+button:hover{background:#215e53}button:focus-visible{outline:3px solid #86b5a3;outline-offset:2px}
+#result{font-size:12px;line-height:1.7;color:#61756e;margin:8px 0 0}
+</style></head><body><button id="download" type="button" hidden>動作ログ出力</button><p id="result" role="status" hidden></p><script>
+(()=>{'use strict';
+const LIMIT=2000,STORE='chokomana_operation_log_v1';let diag=null,parentAccess=true;
+function makeID(){return globalThis.crypto?.randomUUID?.()||Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)}
+function clean(value){return String(value).replace(/https?:\/\/[^\s<>"']+/g,'[url]').replace(/(?:sb_(?:secret|publishable)_|Bearer\s+|eyJ)[\w.\/-]+/gi,'[token]').slice(0,180)}
+function init(p,d){
+ const state={records:[],ids:new Set(),idOrder:[],controls:{},pending:null,dropped:0,storage:'ok',parent_access:parentAccess};
+ state.add=(kind,action,extra={})=>{
+  const row={id:makeID(),at:new Date().toISOString(),origin:'browser',kind,action,...extra};
+  state.merge([row]);return row;
+ };
+ state.merge=rows=>{for(const row of rows){if(!row?.id||state.ids.has(row.id))continue;state.ids.add(row.id);state.idOrder.push(row.id);state.records.push(row)}
+  state.records.sort((a,b)=>(Date.parse(a.at)||0)-(Date.parse(b.at)||0));
+  if(state.records.length>LIMIT){const removed=state.records.splice(0,state.records.length-LIMIT);state.dropped+=removed.length}
+  while(state.idOrder.length>LIMIT*5){const id=state.idOrder.shift();state.ids.delete(id)}
+ };
+ state.persist=()=>{try{p.localStorage.setItem(STORE,JSON.stringify({records:state.records,dropped:state.dropped}))}catch(e){state.storage='unavailable'}};
+ try{const saved=JSON.parse(p.localStorage.getItem(STORE)||'{}');if(Array.isArray(saved.records))state.merge(saved.records);state.dropped+=Number(saved.dropped)||0}catch(e){state.storage='unavailable'}
+ state.finish=(pending,marker)=>{
+  if(state.pending!==pending)return;
+  p.requestAnimationFrame(()=>p.requestAnimationFrame(()=>{
+   if(state.pending!==pending)return;
+   state.add('click_to_display',pending.action,{trace_id:marker.trace,client_trace_id:pending.id,
+    duration_ms:Math.round((p.performance.now()-pending.start)*100)/100,status:'paint_estimate',
+    metric:'click_to_ready_marker_plus_two_animation_frames'});
+   state.pending=null;state.persist();
+  }));
+ };
+ state.check=()=>{
+  const pending=state.pending;if(!pending||!d)return;
+  const markers=d.querySelectorAll('[data-cm-ready]');
+  for(const el of markers){try{const marker=JSON.parse(el.getAttribute('data-cm-ready'));if(marker.action===pending.action&&!pending.before.has(marker.run)){state.finish(pending,marker);break}}catch(e){}}
+ };
+ if(d){
+  d.addEventListener('click',event=>{
+   const target=event.target?.closest?.('button,a');if(!target||target.disabled)return;
+   const anchor=target.closest('a.cm-subject,a[href]');
+   if(anchor&&(anchor.classList.contains('cm-subject')||anchor.closest('[data-testid="stLinkButton"]'))){
+    const cls=anchor.className||'';let source=['soroban','kotoba','geometry'].find(s=>cls.includes('cm-subject-'+s));
+    // For native link buttons, infer app ONLY from the registered fixed title labels.
+    if(!source){const label=(anchor.textContent||'').trim();source=label.startsWith('そろばん')?'soroban':label.startsWith('こくご')?'kotoba':label.startsWith('ずけい')?'geometry':'app'}
+    state.add('external_app_open',source,{status:'destination_display_unmeasured'});state.persist();return;
+   }
+   let action=null;
+   for(const key of Object.keys(state.controls)){if(target.closest('.st-key-'+p.CSS.escape(key))){action=key;break}}
+   if(!action)return;
+   if(state.pending)state.add('action_interrupted',state.pending.action,{status:'superseded'});
+   const before=new Set();for(const el of d.querySelectorAll('[data-cm-ready]')){try{before.add(JSON.parse(el.getAttribute('data-cm-ready')).run)}catch(e){}}
+   const pending={id:makeID(),action,start:p.performance.now(),before};state.pending=pending;
+   state.add('click',action,{client_trace_id:pending.id});state.persist();
+   p.setTimeout(()=>{if(state.pending===pending){state.add('click_to_display',action,{client_trace_id:pending.id,
+      duration_ms:Math.round(p.performance.now()-pending.start),status:'ready_marker_not_observed'});state.pending=null;state.persist()}},30000);
+  },true);
+  const observer=new p.MutationObserver(()=>state.check());observer.observe(d.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['data-cm-ready']});state.observer=observer;
+  p.addEventListener('error',event=>{state.add('browser_error','script_or_resource',{status:'error',line:Number(event.lineno)||0});state.persist()},true);
+  p.addEventListener('unhandledrejection',()=>{state.add('browser_error','unhandled_promise',{status:'error'});state.persist()});
+  p.addEventListener('pagehide',()=>state.persist());
+  try{const observer=new p.PerformanceObserver(list=>{for(const entry of list.getEntries())state.add('long_task','main_thread',{duration_ms:Math.round(entry.duration),status:'observed'})});observer.observe({type:'longtask',buffered:true});state.longTaskObserver=observer}catch(e){}
+ }
+ state.add('observer_ready','diagnostics',{status:d?'ok':'parent_access_unavailable'});state.persist();return state;
+}
+try{const p=window.parent,d=p.document;diag=p.__chokomanaPerformanceV1||(p.__chokomanaPerformanceV1=init(p,d))}
+catch(e){parentAccess=false;diag=init(window,null)}
+const download=document.getElementById('download'),result=document.getElementById('result');
+let appVersion='17',serverDropped=0;
+window.addEventListener('message',event=>{
+ if(event.source!==parent||event.data?.type!=='streamlit:render')return;
+ const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'17';
+ download.hidden=!args.show_download;result.hidden=!args.show_download;
+ if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
+ diag.check();diag.persist();
+ parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:args.show_download?94:0},'*');
+});
+download.addEventListener('click',()=>{
+ diag.add('export','operation_log',{status:'download_requested'});diag.persist();
+ let p;try{p=parentAccess?parent:window}catch(e){p=window}
+ const records=[...diag.records].sort((a,b)=>String(a.at).localeCompare(String(b.at)));
+ const bundle={schema_version:1,log_type:'chokomana_operations',app_version:appVersion,
+  exported_at:new Date().toISOString(),record_count:records.length,
+  retention:{max_records:LIMIT,browser_dropped:diag.dropped,server_dropped:serverDropped},
+  coverage:{hub_server:true,hub_click_to_display_estimate:diag.parent_access,
+   child_app_display:false,browser_long_tasks:!!diag.longTaskObserver,inflight_action:diag.pending?.action||null,note:'Display timing is a ready-marker + two-animation-frame estimate, not proof that external apps or every asset finished loading.'},
+  environment:{language:navigator.language,viewport:{width:p.innerWidth,height:p.innerHeight},
+   device_pixel_ratio:p.devicePixelRatio||1,storage:diag.storage},records};
+ const blob=new Blob([JSON.stringify(bundle,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob);
+ const a=document.createElement('a');a.href=url;a.download='chokomana_operation_log_'+new Date().toISOString().replace(/[:.]/g,'-')+'.json';
+ document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+ result.textContent='動作ログを出力しました。ダウンロードしたJSONを、このチャットに添付できます。';
+});
+parent.postMessage({isStreamlitMessage:true,type:'streamlit:componentReady',apiVersion:1},'*');
+parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:0},'*');
+})();
+</script></body></html>'''
+
+
+
+for _cm_trace_name in (
+    'cm_api_request', 'fetch_day', 'cm_prepare_launch_links', '_make_launch_link',
+    'cm_load_daily_plan', 'cm_plan_analyze', 'cm_build_daily_plan',
+    'cm_restore_account', 'cm_login_account', 'cm_register_account', 'cm_change_password', 'cm_save_plan_age'):
+    globals()[_cm_trace_name] = cm_diag_trace(_cm_trace_name)(globals()[_cm_trace_name])
+main = cm_diag_run(main)
+
 if __name__ == "__main__":
     main()
+
