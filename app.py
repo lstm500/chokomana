@@ -229,6 +229,7 @@ def voice_panel(rows: list[dict]) -> str:
 .controls{display:flex;gap:9px}.controls button{border:0;border-radius:13px;padding:13px 11px;font-weight:800;font-size:14px;cursor:pointer}
 #play{flex:1;background:#287466;color:white}#stop{background:#ffffff;color:#245a4b;border:1px solid #9bb6a8;min-width:78px}
 #status{text-align:center;color:#66758a;font-size:12px;min-height:23px;padding:8px 0}
+
 </style></head><body><div class="panel">
 <div class="tiles" id="tiles" aria-label="スタンプの読み上げ順"></div>
 <div class="controls"><button id="play" type="button">▶ スタンプを読み上げる</button><button id="stop" type="button">停止</button></div>
@@ -511,6 +512,20 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .stApp [data-testid="stAlert"] [data-testid="stAlertContainer"]{background:#edf5f3!important}
 .stApp .st-key-cm_account_form [data-testid="stAlert"] [data-testid="stMarkdownContainer"],
 .stApp .st-key-cm_account_form [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p{color:#842c20!important;-webkit-text-fill-color:#842c20!important}
+/* Daily assignments share the existing account colors, with clear row spacing. */
+.cm-plan-list{list-style:none;margin:16px 0;padding:0;display:grid;gap:14px}
+.cm-plan-item{display:grid;grid-template-columns:30px minmax(0,1fr);gap:10px;align-items:start;padding:14px 12px;border:1px solid #d6e1da;border-radius:14px;background:#ffffff;color:#233c3c}
+.cm-plan-number{display:block;align-self:start;width:28px;height:28px;line-height:28px;border-radius:50%;background:#e5efe8;color:#225b4e;text-align:center;font-weight:800}
+.cm-plan-item h3{font-size:16px!important;line-height:1.6!important;margin:4px 0 8px!important;padding:0!important;overflow-wrap:anywhere;color:#233c3c!important}
+.cm-plan-item p{font-size:13px;line-height:1.7;margin:4px 0;color:#526b60;overflow-wrap:anywhere}
+.cm-plan-subject{font-size:12px;color:#526b60;line-height:1.6}
+.cm-plan-path{padding-top:6px;border-top:1px solid #edf1ee}
+.st-key-cm_daily_plan{margin:16px 0 20px!important}
+.stApp [data-testid="stNumberInput"] input,.stApp [data-testid="stNumberInput"] [data-baseweb="input"],
+.stApp [data-testid="stNumberInput"] [data-baseweb="base-input"]{background:#ffffff!important;color:#233c3c!important;-webkit-text-fill-color:#233c3c!important;color-scheme:light}
+.stApp [data-testid="stNumberInput"] button{background:#edf5f3!important;color:#245a4b!important}
+.stApp [data-testid="stLinkButton"] a{background:#287466!important;border:1px solid #287466!important;border-radius:12px;min-height:44px;color:#ffffff!important}
+.stApp [data-testid="stLinkButton"] a p{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
 </style>
 """
 
@@ -624,6 +639,10 @@ def render_home(apps: list[dict]) -> None:
     def launch_cards():
         st.markdown(home_cards_html(apps), unsafe_allow_html=True)
     launch_cards()
+    @st.fragment(run_every=60)
+    def daily_assignments():
+        render_daily_plan(apps)
+    daily_assignments()
     with st.container(border=True, key="home_progress"):
         st.markdown('<div class="cm-progress-heading"><span>✦</span>きょうの がんばり</div>', unsafe_allow_html=True)
         if st.button("今日の成果を確認する", key="home_today", type="primary", use_container_width=True):
@@ -1114,6 +1133,7 @@ def render_settings():
     st.caption("ユーザー名：" + st.session_state.get("cm_account_username", ""))
     if changed:
         st.success("パスワードを変更しました。次回から新しいパスワードでログインできます。")
+    render_plan_age()
     # Share the existing account card and widget styles in both browser themes.
     with st.container(border=True, key="cm_account_form"):
         st.markdown("**パスワードを変更**")
@@ -1144,7 +1164,7 @@ def render_settings():
 
 def cm_clear_account_state():
     for key in list(st.session_state):
-        if key.startswith(("cm_link_", "cm_today_", "cm_history_")) or key in (
+        if key.startswith(("cm_link_", "cm_today_", "cm_history_", "cm_plan_")) or key in (
             "cm_profile", "cm_account_token", "cm_account_username", "cm_hub_validated_token",
             "cm_change_current", "cm_change_new", "cm_change_confirmation", "cm_password_changed"):
             st.session_state.pop(key, None)
@@ -1331,6 +1351,463 @@ def cm_launch_url(base,code):
     query=dict(parse_qsl(parsed.query,keep_blank_values=True))
     query['cm_launch']=code
     return urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode(query),''))
+
+# Adaptive planning uses observed responses, never medal colors or a language model's guesses.
+CM_PLANNER_VERSION = 'adaptive-1'
+
+
+def cm_plan_rows(table, params):
+    """Page a single verified learner's data; never silently analyze a partial history."""
+    result = []
+    for offset in range(0, 100000, 500):
+        rows = cm_account_request('GET', '/rest/v1/' + table,
+                                  params={**params, 'offset': str(offset), 'limit': '500'})
+        if not isinstance(rows, list):
+            raise RuntimeError('invalid learning response')
+        result.extend(rows)
+        if len(rows) < 500:
+            return result
+    raise RuntimeError('learning history pagination limit reached')
+
+
+def cm_plan_settings():
+    profile = st.session_state['cm_profile']
+    cache = st.session_state.get('cm_plan_settings')
+    if cache and cache['profile'] == profile and time.time()-cache.get('at',0)<60:
+        return cache['age']
+    rows = cm_account_request('GET', '/rest/v1/chokomana_learner_settings', params={
+        'profile_id': 'eq.' + profile, 'select': 'age', 'limit': '1'})
+    if not isinstance(rows, list):
+        raise RuntimeError('invalid settings response')
+    age = rows[0]['age'] if rows else None
+    st.session_state['cm_plan_settings'] = {'profile': profile, 'age': age, 'at': time.time()}
+    return age
+
+
+def cm_save_plan_age(age):
+    if isinstance(age, bool) or not isinstance(age, int) or not 1 <= age <= 100:
+        raise ValueError('年齢は1〜100歳で入力してください。')
+    profile = st.session_state['cm_profile']
+    cm_account_request('POST', '/rest/v1/chokomana_learner_settings', {
+        'profile_id': profile, 'age': age, 'updated_at': datetime.now(timezone.utc).isoformat()},
+        {'on_conflict': 'profile_id'}, 'resolution=merge-duplicates,return=minimal')
+    st.session_state['cm_plan_settings'] = {'profile': profile, 'age': age, 'at': time.time()}
+    st.session_state.pop('cm_plan_snapshot', None)
+
+
+def render_plan_age():
+    try:
+        age = cm_plan_settings()
+    except RuntimeError:
+        st.error('年齢の設定を読み込めませんでした。接続を確認して再試行してください。')
+        return
+    with st.container(border=True, key='cm_age_card'):
+        st.markdown('**1日の学習時間**')
+        with st.form('cm_age_form'):
+            chosen = st.number_input('年齢（歳）', min_value=1, max_value=100,
+                                     value=age, step=1, placeholder='年齢を入力', key='cm_plan_age_input')
+            st.caption('1日の目安は年齢×10分。例：5歳なら50分です。')
+            save = st.form_submit_button('年齢を保存', type='primary', use_container_width=True)
+        if save:
+            try:
+                cm_save_plan_age(chosen)
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+            except RuntimeError:
+                st.error('保存できませんでした。もう一度お試しください。')
+
+
+def cm_plan_date(value):
+    try:
+        parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        return parsed if parsed.tzinfo else None
+    except (ValueError, TypeError):
+        return None
+
+
+def cm_plan_union(spans):
+    merged = []
+    for start, end in sorted(spans):
+        if end <= start:
+            continue
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def cm_plan_menus(catalog, age):
+    import math
+    latest = {}
+    for row in sorted(catalog, key=lambda r: (r.get('published_at', ''), r.get('content_version', ''))):
+        if row.get('entry_type') != 'menu' or row.get('source_app') not in SUBJECT_NAMES:
+            continue
+        latest[(row['source_app'], row['entry_id'])] = row
+    menus = []
+    for row in latest.values():
+        p = row.get('payload') or {}
+        if p.get('is_active') is False:
+            continue
+        if p.get('age_min') is not None and age < p['age_min']:
+            continue
+        if p.get('age_max') is not None and age > p['age_max']:
+            continue
+        # Only catalog entries with a real duration and known selection path can be assigned.
+        duration = p.get('estimated_duration_ms')
+        if not isinstance(duration, (float, int)) or not math.isfinite(duration) or not 0 < duration <= 14400000:
+            continue
+        if not isinstance(p.get('selection_instructions'), list) or not p['selection_instructions']:
+            continue
+        menus.append({**p, 'source_app': row['source_app'], 'menu_id': row['entry_id'],
+                      'content_version': row['content_version']})
+    return menus
+
+
+def cm_plan_analyze(events, menus, profile, today):
+    """First scored submissions only; app support/retries never count as unaided mastery."""
+    from collections import defaultdict
+    from statistics import median
+    unique = {}
+    for e in events:
+        if e.get('profile_id') != profile:
+            raise RuntimeError('learning owner mismatch')
+        if e['event_id'] in unique and unique[e['event_id']] != e:
+            raise RuntimeError('learning event conflict')
+        unique[e['event_id']] = e
+    rows = sorted(unique.values(), key=lambda e: (e['occurred_at'], e.get('sequence', 0), e['event_id']))
+    starts, items, ends, spans, unknown, reloaded = {}, {}, {}, defaultdict(list), set(), set()
+    for e in rows:
+        aid = (e['source_app'], e['attempt_id']); p = e.get('payload') or {}
+        if e['event_type'] == 'session_started':
+            starts[aid] = e
+        elif e['event_type'] == 'item_presented':
+            items[(aid, e.get('occurrence_id'))] = e
+        elif e['event_type'] == 'session_ended':
+            ends[aid] = e
+        elif e['event_type'] == 'session_resumed' and p.get('reason') == 'page_reload':
+            reloaded.add(aid)
+        elif e['event_type'] == 'time_interval_closed':
+            a, b = cm_plan_date(p.get('start_at')), cm_plan_date(p.get('end_at'))
+            active = p.get('active_ms')
+            if p.get('timing_quality') != 'complete' or active is None:
+                unknown.add(aid)
+            if active == 0:
+                continue
+            if (not a or not b or b <= a or not isinstance(active, (int, float))
+                    or abs((b - a).total_seconds()*1000 - active) > 2):
+                unknown.add(aid)
+                continue
+            spans[aid].append((a, b))
+    observations, seen = defaultdict(lambda: defaultdict(list)), set()
+    for e in rows:
+        if e['event_type'] != 'response_submitted':
+            continue
+        aid = (e['source_app'], e['attempt_id']); p = e.get('payload') or {}
+        item = items.get((aid, e.get('occurrence_id'))); start = starts.get(aid)
+        if not item or not start:
+            continue
+        ip, sp = item['payload'], start['payload']
+        key = (aid, e.get('occurrence_id'), p.get('substep_id'))
+        if key in seen:
+            continue
+        seen.add(key)
+        if (p.get('response_index') != 1 or ip.get('parent_occurrence_id')
+                or ip.get('presentation_kind') == 'retry' or p.get('response_status') != 'answered'
+                or p.get('assessment_method') != 'automatic' or not isinstance(p.get('is_correct'), bool)):
+            continue
+        support = p.get('support_before_response')
+        clean = (isinstance(support, dict) and support.get('hint_count') == 0
+                 and all(support.get(k) is False for k in ('explanation_seen', 'answer_seen', 'worked_example_seen'))
+                 and support.get('parent_help') is not True and ip.get('answer_exposed_before') is False)
+        cohort = json.dumps([sp.get('settings_snapshot'), sp.get('mode'), p.get('input_method')], sort_keys=True)
+        menu_key = (e['source_app'], sp.get('menu_id'), start['content_version'])
+        when = cm_plan_date(e['occurred_at'])
+        if when:
+            observations[menu_key][cohort].append({'day': when.astimezone(TOKYO).date(),
+                'correct': p['is_correct'], 'clean': clean, 'aid': aid,
+                'question': e.get('question_id'), 'time': when})
+    stats, duration_samples = {}, defaultdict(lambda: defaultdict(list))
+    for key, cohorts in observations.items():
+        # Do not merge unlike settings/modes/input methods; use the most recently observed cohort.
+        values = max(cohorts.values(), key=lambda v: v[-1]['time'])[-40:]
+        clean = [v for v in values if v['clean']]
+        rate = sum(v['correct'] for v in clean) / len(clean) if clean else None
+        aids = {v['aid'] for v in clean}
+        recent_aid = values[-1]['aid']
+        last_set = [v for v in values if v['aid'] == recent_aid]
+        last_rate = sum(v['correct'] and v['clean'] for v in last_set) / len(last_set)
+        # Questions must vary, with evidence in multiple actual attempts, before advancing.
+        mastered = (len(clean) >= 8 and len(aids) >= 2 and len({v['question'] for v in clean if v['question']}) >= 4
+                    and rate >= .9 and last_rate >= .85)
+        weak = len(last_set) >= 4 and last_rate < .7
+        daily = defaultdict(list)
+        for v in values:
+            daily[v['day']].append(v)
+        streak = 0
+        for day in sorted(daily):
+            vv = daily[day]
+            if sum(v['correct'] and v['clean'] for v in vv)/len(vv) >= .85:
+                streak += 1
+            else:
+                streak = 0
+        interval = (1, 3, 7, 14, 30)[min(max(streak-1, 0), 4)]
+        last_day = max(daily)
+        stats[key] = {'mastered': mastered, 'weak': weak, 'accuracy': rate,
+            'posterior': (1+sum(v['correct'] for v in clean))/(2+len(clean)),
+            'due': last_day + timedelta(days=1 if weak else interval), 'last_day': last_day,
+            'attempts': len(aids), 'count': len(clean)}
+    for aid, end in ends.items():
+        start = starts.get(aid)
+        if not start or end['payload'].get('status') != 'completed' or aid in unknown or aid in reloaded or not spans[aid]:
+            continue
+        sp = start['payload']
+        condition = json.dumps([sp.get('settings_snapshot'), sp.get('planned_question_count'), sp.get('mode')], sort_keys=True)
+        ms = round(sum((b-a).total_seconds()*1000 for a,b in cm_plan_union(spans[aid])))
+        key = (start['source_app'], sp.get('menu_id'), start['content_version'])
+        duration_samples[key][condition].append((end['occurred_at'], ms, sp.get('planned_question_count')))
+    durations = {}
+    for key, cohorts in duration_samples.items():
+        values = max(cohorts.values(), key=lambda v: max(x[0] for x in v))
+        recent = sorted(values, reverse=True)[:10]
+        if len(recent) >= 3:
+            durations[key] = {'ms': round(median(x[1] for x in recent)), 'count': len(recent), 'question_count': recent[0][2]}
+    lo = datetime.combine(today, datetime.min.time(), TOKYO)
+    hi = lo + timedelta(days=1)
+    daily_spans = [(max(a,lo), min(b,hi)) for ss in spans.values() for a,b in ss if b>lo and a<hi]
+    measured = round(sum((b-a).total_seconds()*1000 for a,b in cm_plan_union(daily_spans)))
+    menu_map = {(m['source_app'],m['menu_id'],m['content_version']):m for m in menus}
+    estimated, missing = 0, 0
+    today_counts = defaultdict(int)
+    completed = defaultdict(int)
+    for aid, end in ends.items():
+        start = starts.get(aid)
+        if start and end['payload'].get('status')=='completed':
+            completed[(start['source_app'],start['payload'].get('menu_id'),start['content_version'])] += 1
+        when = cm_plan_date(end['occurred_at']); start = starts.get(aid)
+        if not start or not when or when.astimezone(TOKYO).date()!=today or end['payload'].get('status')!='completed':
+            continue
+        key = (start['source_app'], start['payload'].get('menu_id'), start['content_version'])
+        today_counts[key] += 1
+        if aid in unknown or aid in reloaded or not spans[aid]:
+            missing += 1
+            m = menu_map.get(key)
+            if m:
+                actual = sum((min(b,hi)-max(a,lo)).total_seconds()*1000 for a,b in cm_plan_union(spans[aid]) if b>lo and a<hi)
+                estimated += max(0, m['estimated_duration_ms'] - actual)
+    partial_today = any(aid in unknown and any(b>lo and a<hi for a,b in ss) for aid,ss in spans.items())
+    return {'stats': stats, 'durations': durations, 'spent_ms': measured+round(estimated),
+            'measured_ms': measured, 'estimated_ms': round(estimated), 'missing_time': missing,
+            'partial_time': partial_today, 'today_counts': today_counts, 'completed': completed}
+
+
+# Explicit planning prerequisites between independent soroban tracks. These are conservative
+# portal policy, not facts inferred from the catalog's null prerequisite fields.
+CM_TRACK_GATES = {
+ 'soroban:calculation:mul': ['soroban:kuku:1'],
+ 'soroban:calculation:div': ['soroban:calculation:mm1'],
+ 'soroban:calculation:advanced': ['soroban:calculation:ba5x4', 'soroban:calculation:bs5x4'],
+ 'soroban:tutorial:mul': ['soroban:kuku:1'],
+ 'soroban:tutorial:div': ['soroban:calculation:mm1'],
+ 'soroban:hosu:add': ['soroban:calculation:ba1'],
+ 'soroban:hosu:sub': ['soroban:calculation:bs1'],
+}
+
+
+def cm_plan_candidates(menus, analysis, today):
+    from collections import defaultdict
+    groups = defaultdict(list); stats = analysis['stats']; candidates = []
+    def key(m): return (m['source_app'],m['menu_id'],m['content_version'])
+    known = {m['menu_id']:stats.get(key(m),{}) for m in menus}
+    for m in menus:
+        if 'reading_aloud' in m.get('mode_options', []):
+            continue  # Read-aloud alone is not evidence of mastery.
+        groups[(m['source_app'],m.get('progression_group_id') or m['menu_id'])].append(m)
+    for (_, group), mm in sorted(groups.items()):
+        mm.sort(key=lambda m: (m.get('difficulty_order') or 0,m['menu_id']))
+        observed = [m for m in mm if key(m) in stats or ('learn' in m.get('mode_options',[]) and analysis['completed'].get(key(m),0))]
+        if not observed and not all(known.get(mid,{}).get('mastered') for mid in CM_TRACK_GATES.get(group, [])):
+            continue
+        # A demonstrated higher level can be the starting point; don't force every old level.
+        frontier = max(observed,key=lambda m:m.get('difficulty_order') or 0) if observed else mm[0]
+        fs = stats.get(key(frontier), {})
+        learned = 'learn' in frontier.get('mode_options',[]) and analysis['completed'].get(key(frontier),0)>0
+        if fs.get('mastered') or learned:
+            allowed_next = set(frontier.get('next_menu_ids') or [])
+            nexts = [m for m in mm if m['menu_id'] in allowed_next]
+            if nexts:
+                frontier = nexts[0]
+        chosen = [frontier] + [m for m in observed if key(m)!=key(frontier) and stats.get(key(m),{}).get('due',today+timedelta(days=1))<=today]
+        for m in chosen:
+            ss = stats.get(key(m), {})
+            if ss.get('mastered') and ss.get('due', today)>today:
+                continue
+            required = m.get('prerequisite_skill_ids')
+            if required:
+                demonstrated = set(s for row in menus if stats.get(key(row),{}).get('mastered') for s in row.get('skill_ids',[]) if len(row.get('skill_ids',[]))==1)
+                if not set(required)<=demonstrated:
+                    continue
+            if ss.get('weak'):
+                reason, score = 'もういちど練習', 110 + 20*(1-ss['posterior'])
+            elif ss and ss.get('due',today)<=today:
+                reason, score = '思い出す復習', 105 + min(15,(today-ss['due']).days)
+            elif key(m)!=key(mm[0]) and not ss:
+                reason, score = ('学んだ教材のつづき' if 'learn' in m.get('mode_options',[]) else '得意をのばす・次の単元'), 100
+            else:
+                reason, score = ('理解をたしかめる', 75) if ss else ('はじめの力だめし', 70)
+            estimate = analysis['durations'].get(key(m))
+            measured = estimate and estimate['question_count']==m.get('question_count_default')
+            duration = estimate['ms'] if measured else m['estimated_duration_ms']
+            if duration<=0:
+                continue
+            candidates.append({**m, 'duration_ms':int(duration), 'duration_basis':'measured' if measured else 'provisional',
+                'reason':reason, 'score':score, 'key':key(m), 'accuracy':ss.get('accuracy')})
+    return candidates
+
+
+def cm_build_daily_plan(candidates, remaining_ms, today_counts):
+    """Bounded knapsack in 10-second units, rounding UP to enforce the duration cap."""
+    import math
+    capacity = max(0, int(remaining_ms//10000))
+    if capacity==0:
+        return []
+    # 1..100 years accepted in settings; use sparse DP and cap study-item count naturally.
+    dp = {0:(0.0, [])}
+    ordered = sorted(candidates,key=lambda c:(c['source_app'],c['menu_id']))
+    for candidate in ordered:
+        units = math.ceil(candidate['duration_ms']/10000)
+        completed = today_counts.get(candidate['key'],0)
+        choices = max(0,3-completed)
+        previous = list(dp.items())
+        for used,(value,path) in previous:
+            for count in range(1,choices+1):
+                total = used+units*count
+                if total>capacity:
+                    break
+                bonus = sum((1,.65,.35)[completed+i] for i in range(count))
+                quality = value+candidate['score']*units*bonus
+                if total not in dp or quality>dp[total][0]:
+                    dp[total]=(quality,path+[(candidate,count)])
+    # Fit at least 95% if achievable; otherwise return the honest shortfall.
+    lower = math.ceil(remaining_ms*.95/10000)
+    feasible = [u for u in dp if u>=lower]
+    best = max(feasible,key=lambda u:(dp[u][0],u)) if feasible else max(dp)
+    return [{**c,'repetitions':count,'planned_ms':c['duration_ms']*count} for c,count in dp[best][1]]
+
+
+def cm_load_daily_plan(age, allowed_sources=None):
+    profile = st.session_state['cm_profile']; today = now_jst().date()
+    catalog = cm_plan_rows('chokomana_learning_catalog', {'entry_type':'eq.menu',
+        'select':'entry_type,entry_id,source_app,content_version,payload,published_at',
+        'order':'source_app,entry_id,content_version'})
+    menus = cm_plan_menus(catalog,age)
+    rows = cm_plan_rows('chokomana_learning_events', {'profile_id':'eq.'+profile,
+        'select':'event_id,profile_id,source_app,content_version,attempt_id,occurrence_id,question_id,sequence,occurred_at,event_type,payload',
+        'order':'occurred_at,event_id'})
+    analysis = cm_plan_analyze(rows,menus,profile,today)
+    target = age*10*60000
+    remaining = max(0,target-analysis['spent_ms'])
+    candidates = cm_plan_candidates(menus,analysis,today)
+    if allowed_sources is not None:
+        candidates = [c for c in candidates if c['source_app'] in allowed_sources]
+    reached = analysis['spent_ms'] >= target*.95
+    items = [] if reached else cm_build_daily_plan(candidates,remaining,analysis['today_counts'])
+    planned = sum(i['planned_ms'] for i in items)
+    payload = {'planner_version':CM_PLANNER_VERSION,'age':age,'target_ms':target,
+        'spent_ms':analysis['spent_ms'],'measured_ms':analysis['measured_ms'],
+        'estimated_ms':analysis['estimated_ms'],'missing_time':analysis['missing_time'],
+        'partial_time':analysis['partial_time'],'remaining_ms':remaining,
+        'planned_ms':planned,'items':items,'sources':sorted({m['source_app'] for m in menus}),
+        'reached':reached, 'sufficient':reached or planned>=remaining*.95,
+        'generated_at':datetime.now(timezone.utc).isoformat()}
+    cm_account_request('POST','/rest/v1/chokomana_daily_plans',{
+        'profile_id':profile,'study_date':today.isoformat(),'payload':payload,
+        'updated_at':payload['generated_at']}, {'on_conflict':'profile_id,study_date'},
+        'resolution=merge-duplicates,return=minimal')
+    return payload
+
+
+def cm_minutes(ms):
+    return f'{max(0,ms)/60000:.1f}'.rstrip('0').rstrip('.')
+
+
+def cm_plan_items_html(items):
+    parts = []
+    for n,item in enumerate(items,1):
+        label = html.escape(str(item.get('label',item['menu_id'])))
+        category = html.escape(str(item.get('category_label','')))
+        reason = html.escape(item['reason'])
+        steps = ' → '.join(html.escape(str(x)) for x in item['selection_instructions'])
+        repeats = f' × {item["repetitions"]}回' if item['repetitions']>1 else ''
+        source = html.escape(SUBJECT_NAMES[item['source_app']])
+        basis = '本人の実測' if item['duration_basis']=='measured' else '仮の目安'
+        parts.append(f'<li class="cm-plan-item"><span class="cm-plan-number">{n}</span><div>'
+            f'<div class="cm-plan-subject">{source} · {category}</div><h3>{label}{repeats}</h3>'
+            f'<p>{reason}</p><p>約{cm_minutes(item["planned_ms"])}分 · {basis}</p>'
+            f'<p class="cm-plan-path">えらぶ順：{steps}</p></div></li>')
+    return '<ol class="cm-plan-list">'+''.join(parts)+'</ol>'
+
+
+def render_daily_plan(apps):
+    with st.container(border=True,key='cm_daily_plan'):
+        st.markdown('### きょう やること')
+        try:
+            age = cm_plan_settings()
+        except RuntimeError:
+            st.error('学習設定を読み込めませんでした。')
+            return
+        if age is None:
+            st.info('年齢を設定すると、今日やる学習を自動で選びます。')
+            render_plan_age()
+            return
+        refresh = st.button('学習記録を更新',key='cm_plan_refresh',use_container_width=True)
+        cached = st.session_state.get('cm_plan_snapshot')
+        cache_key = (st.session_state['cm_profile'],now_jst().date().isoformat(),age)
+        if refresh or not cached or cached['key']!=cache_key or time.time()-cached['at']>60:
+            try:
+                with st.spinner('学習記録から、今日の内容を選んでいます…'):
+                    payload = cm_load_daily_plan(age,{a['id'] for a in apps if a['ready']})
+                cached = {'key':cache_key,'at':time.time(),'payload':payload}
+                st.session_state['cm_plan_snapshot']=cached
+            except (RuntimeError,ValueError,KeyError,TypeError):
+                st.error('学習記録を読み込めませんでした。「学習記録を更新」で再試行してください。')
+                st.caption('読み込みに失敗した記録を、未学習として扱うことはありません。')
+                return
+        p = cached['payload']
+        st.markdown(f'**{age}歳 · 1日{age*10}分**　／　学習済み 約{cm_minutes(p["spent_ms"])}分')
+        if not p['reached']:
+            st.caption(f'このあとの予定：約{cm_minutes(p["planned_ms"])}分（残りの目安 {cm_minutes(p["remaining_ms"])}分）')
+        if p['missing_time'] or p['partial_time']:
+            st.caption('未計測の時間があります。完了した学習は単元の目安時間で補っており、残り時間は暫定です。')
+        if p['reached']:
+            st.success('きょうの目安にとどいたよ！')
+        elif p['items']:
+            st.markdown(cm_plan_items_html(p['items']),unsafe_allow_html=True)
+            sources = {i['source_app'] for i in p['items']}
+            for app in apps:
+                if app['id'] in sources:
+                    if app['ready']:
+                        try:
+                            st.link_button(app['title']+'を開く ↗',_make_launch_link(app),use_container_width=True)
+                        except (RuntimeError,ValueError):
+                            st.error(app['title']+'の起動リンクを作れませんでした。')
+                    else:
+                        st.warning(app['title']+'のURLが未設定です。接続設定を確認してください。')
+            st.caption('アプリを開き、一覧の「えらぶ順」で単元を選んでください。単元への直接起動には未対応です。')
+        if not p['sufficient']:
+            st.warning(f'今の進度で選べる単元では、残りの目安に約{cm_minutes(p["remaining_ms"]-p["planned_ms"])}分足りません。'
+                       '時間を埋めるために未習得の上級単元を追加しません。')
+        pending = [SUBJECT_NAMES[s] for s in SUBJECT_NAMES if s not in p['sources']]
+        if pending:
+            st.caption('単元データ未登録：'+'・'.join(pending)+'。登録後、自動選定の対象になります。')
+        with st.expander('選び方・時間の目安について'):
+            st.write('初回回答の正答率とアプリ内のヒント利用を単元別に確認します。十分な成績が複数回そろうと次の単元へ進み、つまずいた単元は繰り返します。')
+            st.write('復習間隔は正答が続くと1→3→7→14→30日へ延ばし、つまずくと翌日に戻します。効果を保証する日数ではなく、成績に応じて調整する初期設定です。')
+            st.write('年齢×10分はこのアプリの設定です。休憩は学習時間に含めず、まとめて続ける必要はありません。予定は残り時間の95〜100％を目指し、1日の目安の95％に達したら終了にします。同じ単元は1日3回までにします。')
+            st.write('所要時間は保証値ではありません。同じ条件の完了記録が3回以上そろうと直近10回までの実測中央値を使い、それまでは仮の目安を表示します。')
+            st.caption('学習ログから判定する適応型モデルです。生成AIへのデータ送信やAPIの追加料金はありません。画面外での助力や内面の理解は断定しません。')
+
 
 if __name__ == "__main__":
     main()
