@@ -528,6 +528,13 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .stApp [data-testid="stNumberInput"] button:focus-visible{outline:2px solid #287466;outline-offset:-3px}
 .stApp [data-testid="stLinkButton"] a{background:#287466!important;border:1px solid #287466!important;border-radius:12px;min-height:44px;color:#ffffff!important}
 .stApp [data-testid="stLinkButton"] a p{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
+/* Keep the age prompt and both step buttons on one row, including phones. */
+.st-key-cm_age_stepper [data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:minmax(0,1fr) 44px 44px;gap:6px!important;align-items:start}
+.st-key-cm_age_stepper [data-testid="stColumn"]{width:100%!important;min-width:0!important}
+.st-key-cm_age_stepper [data-testid="stNumberInputStepDown"],
+.st-key-cm_age_stepper [data-testid="stNumberInputStepUp"]{display:none!important}
+.st-key-cm_age_stepper [data-testid="stNumberInput"] input{min-height:44px!important}
+.st-key-cm_age_stepper [data-testid="stButton"] button{min-width:44px!important;min-height:44px!important;padding:0!important;font-size:20px}
 </style>
 """
 
@@ -1397,22 +1404,41 @@ def cm_save_plan_age(age):
     st.session_state.pop('cm_plan_snapshot', None)
 
 
+def cm_step_plan_age(delta):
+    current = st.session_state.get('cm_plan_age_input')
+    st.session_state['cm_plan_age_input'] = max(1, min(100, (current if current is not None else 0) + delta))
+
+
 def render_plan_age():
     try:
         age = cm_plan_settings()
     except RuntimeError:
         st.error('年齢の設定を読み込めませんでした。接続を確認して再試行してください。')
         return
+    if 'cm_plan_age_input' not in st.session_state:
+        st.session_state['cm_plan_age_input'] = age
     with st.container(border=True, key='cm_age_card'):
         st.markdown('**1日の学習時間**')
-        with st.form('cm_age_form'):
-            chosen = st.number_input('年齢（歳）', min_value=1, max_value=100,
-                                     value=age if age is not None else 5, step=1, key='cm_plan_age_input')
-            if age is None:
-                st.caption('最初は5歳を表示しています。年齢を合わせて「年齢を保存」を押してください。')
-            st.caption('1日の目安は年齢×10分。例：5歳なら50分です。')
-            save = st.form_submit_button('年齢を保存', type='primary', use_container_width=True)
+        st.markdown('年齢（歳）')
+        # Explicit step buttons also work when the numeric input has no value.
+        with st.container(key='cm_age_stepper'):
+            field, minus, plus = st.columns([8, 1, 1], gap='small')
+            with field:
+                chosen = st.number_input('年齢（歳）', min_value=1, max_value=100,
+                    value=None, step=1, placeholder='年齢を入れてね！', key='cm_plan_age_input',
+                    label_visibility='collapsed')
+            with minus:
+                st.button('−', key='cm_plan_age_minus', help='年齢を1歳減らす',
+                          on_click=cm_step_plan_age, args=(-1,), use_container_width=True)
+            with plus:
+                st.button('＋', key='cm_plan_age_plus', help='年齢を1歳増やす',
+                          on_click=cm_step_plan_age, args=(1,), use_container_width=True)
+        st.caption('1日の目安は年齢×10分。例：5歳なら50分です。')
+        save = st.button('年齢を保存', key='cm_plan_age_save', type='primary', use_container_width=True)
         if save:
+            if chosen is None:
+                st.error('年齢を入れてね！')
+                return
             try:
                 cm_save_plan_age(chosen)
                 st.rerun()
