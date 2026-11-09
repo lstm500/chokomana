@@ -523,7 +523,9 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .st-key-cm_daily_plan{margin:16px 0 20px!important}
 .stApp [data-testid="stNumberInput"] input,.stApp [data-testid="stNumberInput"] [data-baseweb="input"],
 .stApp [data-testid="stNumberInput"] [data-baseweb="base-input"]{background:#ffffff!important;color:#233c3c!important;-webkit-text-fill-color:#233c3c!important;color-scheme:light}
-.stApp [data-testid="stNumberInput"] button{background:#edf5f3!important;color:#245a4b!important}
+.stApp [data-testid="stNumberInput"] button{background:#edf5f3!important;color:#245a4b!important;min-width:44px!important;min-height:44px!important}
+.stApp [data-testid="stNumberInput"] button:disabled{color:#83988b!important;opacity:.6}
+.stApp [data-testid="stNumberInput"] button:focus-visible{outline:2px solid #287466;outline-offset:-3px}
 .stApp [data-testid="stLinkButton"] a{background:#287466!important;border:1px solid #287466!important;border-radius:12px;min-height:44px;color:#ffffff!important}
 .stApp [data-testid="stLinkButton"] a p{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
 </style>
@@ -1405,7 +1407,9 @@ def render_plan_age():
         st.markdown('**1日の学習時間**')
         with st.form('cm_age_form'):
             chosen = st.number_input('年齢（歳）', min_value=1, max_value=100,
-                                     value=age, step=1, placeholder='年齢を入力', key='cm_plan_age_input')
+                                     value=age if age is not None else 5, step=1, key='cm_plan_age_input')
+            if age is None:
+                st.caption('最初は5歳を表示しています。年齢を合わせて「年齢を保存」を押してください。')
             st.caption('1日の目安は年齢×10分。例：5歳なら50分です。')
             save = st.form_submit_button('年齢を保存', type='primary', use_container_width=True)
         if save:
