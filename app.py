@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='19', default=None)
+        app_version='20', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -494,15 +494,15 @@ play.addEventListener('click',async()=>{
   let began=false,ended=false,startTime=0;
   function begin(){
    if(token!==id||began)return;began=true;startTime=performance.now();mark(i);status.textContent=(i+1)+' / '+n+'　'+items[i].reading+'！';
-   if(ac&&bus){const f=196*Math.pow(4,i/Math.max(1,n-1));const previous=i?196*Math.pow(4,(i-1)/Math.max(1,n-1))*.94:null;note(ac,ac.currentTime+.015,f,previous,.52,bus)}
+   if(ac&&bus){const f=196*Math.pow(4,i/Math.max(1,n-1));const previous=i?196*Math.pow(4,(i-1)/Math.max(1,n-1))*.94:null;note(ac,ac.currentTime+.015,f,previous,.32,bus)}
   }
   function end(){
    if(token!==id||ended)return;ended=true;begin();
-   // At least 650ms per stamp, plus a short gap after the actual reading.
-   timer=setTimeout(()=>reading(i+1),Math.max(80,650-(performance.now()-startTime)));
+   // At least 400ms per stamp, plus a short gap after the actual reading.
+   timer=setTimeout(()=>reading(i+1),Math.max(35,400-(performance.now()-startTime)));
   }
   if(canSpeak&&items[i].reading){
-   const u=new SpeechSynthesisUtterance(items[i].reading);u.lang='ja-JP';u.rate=.85;u.pitch=1.5;u.volume=1;if(ja)u.voice=ja;
+   const u=new SpeechSynthesisUtterance(items[i].reading);u.lang='ja-JP';u.rate=1.15;u.pitch=1.5;u.volume=1;if(ja)u.voice=ja;
    voice=u;u.onstart=begin;u.onend=end;u.onerror=e=>{if(token!==id||['canceled','interrupted'].includes(e.error))return;speechFailed=true;end()};
    try{synth.speak(u)}catch(e){speechFailed=true;end()}
   }else{begin();end()}
@@ -2341,7 +2341,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'19';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'20';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
