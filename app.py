@@ -229,10 +229,19 @@ def cm_diag_bridge(show_download=False):
     d = cm_diag_state()
     settings = show_download
     snapshot = d['records'] if settings else d['records'][-80:]
-    cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
+    event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='17', default=None)
+        app_version='18', default=None)
+    if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
+        nonce=event['refresh_plan']
+        if nonce!=st.session_state.get('cm_plan_last_visibility'):
+            st.session_state['cm_plan_last_visibility']=nonce
+            st.session_state.pop('cm_plan_snapshot',None)
+            for key in list(st.session_state):
+                if key.startswith('cm_link_plan_'):st.session_state.pop(key,None)
+            st.rerun()
+
 
 
 def cm_diag_run(function):
@@ -744,6 +753,29 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .st-key-cm_age_stepper [data-testid="stButton"] button{min-width:44px!important;min-height:44px!important;padding:0!important;font-size:20px}
 .st-key-cm_home_heading [data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:minmax(0,1fr) 88px;gap:10px!important;align-items:center}
 .st-key-cm_home_heading [data-testid="stColumn"]{width:100%!important;min-width:0!important}
+
+.cm-plan-item{grid-template-columns:28px minmax(0,1fr) 140px;gap:10px 14px;align-items:center}
+.cm-plan-content{min-width:0}.cm-plan-number{align-self:start}
+.cm-plan-item .cm-plan-path{grid-column:2 / -1;width:100%;margin:0;padding-top:10px}
+.cm-plan-action{align-self:center;text-align:center;min-width:0}
+.cm-plan-launch{display:block;padding:12px 8px;border-radius:12px;background:#287466;color:white!important;text-decoration:none;font-size:14px;line-height:1.6;min-height:48px;font-weight:700}
+.cm-plan-launch:hover{background:#215e53}.cm-plan-launch:focus-visible{outline:3px solid #86b5a3;outline-offset:3px}
+.cm-plan-finished{color:#245a4b;display:block;text-align:center}.cm-plan-finished>span{display:block;margin-bottom:6px;font-size:30px;line-height:1.2}.cm-plan-finished strong{font-size:14px}
+.cm-plan-progress{font-weight:700;color:#245a4b!important}.cm-plan-earned{display:block;margin-top:8px}.cm-plan-earned:empty{display:none}
+.cm-plan-medal{width:30px;height:30px;display:inline-block;line-height:24px;text-align:center;vertical-align:middle;margin-right:5px;border-radius:50%;font-size:12px;font-weight:800;border:3px double}
+.cm-plan-medal-gold{background:#f5d361;color:#69470a;border-color:#bd8c26}.cm-plan-medal-silver{background:#d8e0e8;color:#3d5266;border-color:#9aa9b8}.cm-plan-medal-bronze{background:#d99c6e;color:#60391e;border-color:#ad7044}.cm-plan-medal-white{background:#f8f9fb;color:#4c5b6a;border-color:#b9c2cb}
+.cm-plan-postponed,.cm-plan-medal-pending{font-size:12px;line-height:1.6;color:#61756e}.cm-plan-done{background:#f2f8f4;border-color:#b8d4c4}
+@media(max-width:640px){.cm-plan-item{grid-template-columns:24px minmax(0,1fr) 92px;gap:9px;padding:13px 10px}.cm-plan-item h3{font-size:15px!important}.cm-plan-launch{font-size:13px;padding:10px 5px}.cm-plan-item .cm-plan-path{font-size:11px}}
+
+/* Fixed action column keeps the launch/status in the same place at every width. */
+.cm-plan-item{display:block;padding:14px 12px}
+.cm-plan-top{display:table;table-layout:fixed;width:100%}
+.cm-plan-order{display:table-cell;width:42px;vertical-align:top;padding-right:14px}
+.cm-plan-content{display:table-cell;vertical-align:top;overflow-wrap:anywhere}
+.cm-plan-action{display:table-cell;width:140px;vertical-align:middle;padding-left:14px}
+.cm-plan-number{display:inline-block;vertical-align:top}
+.cm-plan-item .cm-plan-path{width:auto;margin:10px 0 0 42px;padding-top:10px}
+@media(max-width:640px){.cm-plan-order{width:33px;padding-right:9px}.cm-plan-action{width:101px;padding-left:9px}.cm-plan-item .cm-plan-path{margin-left:33px}.cm-plan-medal{width:24px;height:24px;line-height:18px;margin-right:2px;font-size:11px}}
 </style>
 """
 
@@ -2006,56 +2038,160 @@ def cm_build_daily_plan(candidates, remaining_ms, today_counts):
     return [{**c,'repetitions':count,'planned_ms':c['duration_ms']*count} for c,count in dp[best][1]]
 
 
+def cm_reconcile_plan(items, events, stamps, profile, day, generated_at):
+    """One completed attempt can credit one card once; medal is joined by attempt ID."""
+    starts={}; ends={}; medals={}; seen=set()
+    for row in stamps:
+        if row.get('profile_id')!=profile or row.get('study_date')!=day.isoformat():
+            continue
+        medals[(row['source_app'],str(row['attempt_id']))]=row
+    for e in sorted(events,key=lambda e:(e['occurred_at'],e['event_id'])):
+        if e.get('profile_id')!=profile or e['event_id'] in seen:
+            continue
+        seen.add(e['event_id']); key=(e['source_app'],str(e['attempt_id']))
+        if e['event_type']=='session_started':starts[key]=e
+        if e['event_type']=='session_ended' and e['payload'].get('status')=='completed':ends.setdefault(key,e)
+    result=[{**item,'completed_attempts':[],'medals':[]} for item in items]
+    used=set()
+    # Explicit assignments are credited first; unassigned free practice can fill the same unit.
+    ordered=sorted(ends,key=lambda k:(not bool(starts.get(k,{}).get('payload',{}).get('plan_item_id')),ends[k]['occurred_at'],k))
+    for key in ordered:
+        start=starts.get(key); end=ends[key]
+        if not start:continue
+        when=cm_plan_date(start['occurred_at']); finish=cm_plan_date(end['occurred_at'])
+        if not when or not finish or finish.astimezone(TOKYO).date()!=day:continue
+        p=start['payload']; assigned=p.get('plan_item_id')
+        for item in result:
+            if assigned and assigned!=item['plan_item_id']:continue
+            if (item['source_app'],item['menu_id'],item['content_version'])!=(key[0],p.get('menu_id'),start['content_version']):continue
+            cutoff=cm_plan_date(item.get('assigned_at',generated_at))
+            if not assigned and cutoff and when<cutoff:continue
+            if len(item['completed_attempts'])>=item['repetitions'] or key in used:continue
+            used.add(key);item['completed_attempts'].append(key[1])
+            medal=medals.get(key)
+            if medal and medal.get('grade') in GRADE_NAMES:
+                item['medals'].append({'attempt_id':key[1],'grade':medal['grade'],'stamp_char':medal.get('stamp_char','')})
+            break
+    for item in result:
+        item['completed_count']=len(item['completed_attempts'])
+        item['done']=item['completed_count']>=item['repetitions']
+    return result
+
+
+def cm_plan_launch_links(items, apps):
+    import secrets
+    profile=st.session_state['cm_profile']; now=datetime.now(timezone.utc)
+    app_map={a['id']:a for a in apps if a.get('ready')}
+    links={}; pending={}; payload=[]
+    for item in items:
+        if item.get('done') or item.get('available_repetitions',0)<=0:continue
+        app=app_map.get(item['source_app'])
+        if not app or not _valid_https_url(app['url']):continue
+        key='cm_link_plan_'+item['plan_item_id']; cached=st.session_state.get(key)
+        if cached and cached.get('profile')==profile and cached.get('url')==app['url'] and cached['expiry']>now+timedelta(seconds=70):
+            links[item['plan_item_id']]=cached['link'];continue
+        code=secrets.token_urlsafe(32);expiry=now+timedelta(seconds=CM_TICKET_SECONDS)
+        modes=item.get('mode_options') or ['challenge']; mode='challenge' if 'challenge' in modes else 'learn'
+        payload.append({'ticket_hash':hashlib.sha256(code.encode()).hexdigest(),'profile_id':profile,
+            'source_app':item['source_app'],'expires_at':expiry.isoformat(), 'plan_item_id':item['plan_item_id'],
+            'menu_id':item['menu_id'],'content_version':item['content_version'],'launch_mode':mode})
+        pending[item['plan_item_id']]={'key':key,'profile':profile,'url':app['url'],'expiry':expiry,'link':cm_launch_url(app['url'],code)}
+    if payload:
+        url,key=cm_service_config()
+        cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,payload=payload,prefer='return=minimal')
+        for ident,cache in pending.items():
+            st.session_state[cache['key']]=cache;links[ident]=cache['link']
+    return links
+
+
 def cm_load_daily_plan(age, allowed_sources=None):
-    profile = st.session_state['cm_profile']; today = now_jst().date()
-    catalog = cm_plan_rows('chokomana_learning_catalog', {'entry_type':'eq.menu',
-        'select':'entry_type,entry_id,source_app,content_version,payload,published_at',
-        'order':'source_app,entry_id,content_version'})
-    menus = cm_plan_menus(catalog,age)
-    rows = cm_plan_rows('chokomana_learning_events', {'profile_id':'eq.'+profile,
-        'select':'event_id,profile_id,source_app,content_version,attempt_id,occurrence_id,question_id,sequence,occurred_at,event_type,payload',
-        'order':'occurred_at,event_id'})
-    analysis = cm_plan_analyze(rows,menus,profile,today)
-    target = age*10*60000
-    remaining = max(0,target-analysis['spent_ms'])
-    candidates = cm_plan_candidates(menus,analysis,today)
-    if allowed_sources is not None:
-        candidates = [c for c in candidates if c['source_app'] in allowed_sources]
-    reached = analysis['spent_ms'] >= target*.95
-    items = [] if reached else cm_build_daily_plan(candidates,remaining,analysis['today_counts'])
-    planned = sum(i['planned_ms'] for i in items)
-    payload = {'planner_version':CM_PLANNER_VERSION,'age':age,'target_ms':target,
-        'spent_ms':analysis['spent_ms'],'measured_ms':analysis['measured_ms'],
-        'estimated_ms':analysis['estimated_ms'],'missing_time':analysis['missing_time'],
-        'partial_time':analysis['partial_time'],'remaining_ms':remaining,
+    from uuid import uuid4
+    profile=st.session_state['cm_profile'];today=now_jst().date();now=datetime.now(timezone.utc).isoformat()
+    catalog=cm_plan_rows('chokomana_learning_catalog',{'entry_type':'eq.menu',
+        'select':'entry_type,entry_id,source_app,content_version,payload,published_at','order':'source_app,entry_id,content_version'})
+    menus=cm_plan_menus(catalog,age)
+    events=cm_plan_rows('chokomana_learning_events',{'profile_id':'eq.'+profile,
+        'select':'event_id,profile_id,source_app,content_version,attempt_id,occurrence_id,question_id,sequence,occurred_at,event_type,payload','order':'occurred_at,event_id'})
+    stamps=cm_plan_rows('chokomana_stamps',{'profile_id':'eq.'+profile,'study_date':'eq.'+today.isoformat(),
+        'select':'profile_id,source_app,attempt_id,study_date,grade,stamp_char','order':'finished_at,stamp_id'})
+    found=cm_account_request('GET','/rest/v1/chokomana_daily_plans',params={
+        'profile_id':'eq.'+profile,'study_date':'eq.'+today.isoformat(),'select':'payload,updated_at','limit':'1'})
+    previous=found[0] if found else None
+    old=previous['payload'] if previous else {}
+    analysis=cm_plan_analyze(events,menus,profile,today)
+    target=age*10*60000;remaining=max(0,target-analysis['spent_ms']);reached=analysis['spent_ms']>=target*.95
+    candidates=cm_plan_candidates(menus,analysis,today)
+    if allowed_sources is not None:candidates=[c for c in candidates if c['source_app'] in allowed_sources]
+    created=old.get('generated_at') or now
+    items=[]
+    for row in old.get('items',[]):
+        # Preserve card IDs/order through polling, navigation and repeat completions.
+        item={**row};item.setdefault('plan_item_id',str(uuid4()));item.setdefault('assigned_at',created);items.append(item)
+    items=cm_reconcile_plan(items,events,stamps,profile,today,created)
+    # Append new work only after all already assigned cards have been completed.
+    if not reached and (not items or all(i['done'] for i in items)):
+        for row in cm_build_daily_plan(candidates,remaining,analysis['today_counts']):
+            items.append({**row,'plan_item_id':str(uuid4()),'assigned_at':now,'completed_count':0,
+                'completed_attempts':[],'medals':[],'done':False})
+    # Allocate only the remaining budget, without removing finished or postponed cards.
+    pending=[];limits={}
+    for i in items:
+        if i['done']:continue
+        key=(i['source_app'],i['menu_id'],i['content_version'])
+        pending.append({**i,'key':key});limits[key]=3-(i['repetitions']-i['completed_count'])
+    selected=[] if reached else cm_build_daily_plan(pending,remaining,limits)
+    allocations={i['plan_item_id']:i['repetitions'] for i in selected}
+    for i in items:i['available_repetitions']=allocations.get(i['plan_item_id'],0)
+    planned=sum(i['duration_ms']*i['available_repetitions'] for i in items)
+    payload={'planner_version':CM_PLANNER_VERSION,'plan_schema':2,'age':age,'target_ms':target,
+        'spent_ms':analysis['spent_ms'],'measured_ms':analysis['measured_ms'],'estimated_ms':analysis['estimated_ms'],
+        'missing_time':analysis['missing_time'],'partial_time':analysis['partial_time'],'remaining_ms':remaining,
         'planned_ms':planned,'items':items,'sources':sorted({m['source_app'] for m in menus}),
-        'reached':reached, 'sufficient':reached or planned>=remaining*.95,
-        'generated_at':datetime.now(timezone.utc).isoformat()}
-    cm_account_request('POST','/rest/v1/chokomana_daily_plans',{
-        'profile_id':profile,'study_date':today.isoformat(),'payload':payload,
-        'updated_at':payload['generated_at']}, {'on_conflict':'profile_id,study_date'},
-        'resolution=merge-duplicates,return=minimal')
-    return payload
+        'reached':reached,'sufficient':reached or planned>=remaining*.95,'generated_at':created,'refreshed_at':now}
+    data={'profile_id':profile,'study_date':today.isoformat(),'payload':payload,'updated_at':now}
+    if previous:
+        saved=cm_account_request('PATCH','/rest/v1/chokomana_daily_plans',data,
+            {'profile_id':'eq.'+profile,'study_date':'eq.'+today.isoformat(),'updated_at':'eq.'+previous['updated_at']},'return=representation')
+    else:
+        saved=cm_account_request('POST','/rest/v1/chokomana_daily_plans',data,
+            {'on_conflict':'profile_id,study_date'},'resolution=ignore-duplicates,return=representation')
+    if saved:return saved[0]['payload']
+    # Another device won the save: display its stable card identities, rather than overwriting them.
+    latest=cm_account_request('GET','/rest/v1/chokomana_daily_plans',params={
+        'profile_id':'eq.'+profile,'study_date':'eq.'+today.isoformat(),'select':'payload','limit':'1'})
+    if not latest:raise RuntimeError('plan save could not be confirmed')
+    return latest[0]['payload']
 
 
 def cm_minutes(ms):
     return f'{max(0,ms)/60000:.1f}'.rstrip('0').rstrip('.')
 
 
-def cm_plan_items_html(items):
-    parts = []
+def cm_plan_items_html(items, links=None):
+    links=links or {};parts=[]
     for n,item in enumerate(items,1):
-        label = html.escape(str(item.get('label',item['menu_id'])))
-        category = html.escape(str(item.get('category_label','')))
-        reason = html.escape(item['reason'])
-        steps = ' → '.join(html.escape(str(x)) for x in item['selection_instructions'])
-        repeats = f' × {item["repetitions"]}回' if item['repetitions']>1 else ''
-        source = html.escape(SUBJECT_NAMES[item['source_app']])
-        basis = '本人の実測' if item['duration_basis']=='measured' else '仮の目安'
-        parts.append(f'<li class="cm-plan-item"><span class="cm-plan-number">{n}</span><div>'
-            f'<div class="cm-plan-subject">{source} · {category}</div><h3>{label}{repeats}</h3>'
-            f'<p>{reason}</p><p>約{cm_minutes(item["planned_ms"])}分 · {basis}</p>'
-            f'<p class="cm-plan-path">えらぶ順：{steps}</p></div></li>')
+        label=html.escape(str(item.get('label',item['menu_id'])))
+        category=html.escape(str(item.get('category_label','')));reason=html.escape(item['reason'])
+        steps=' → '.join(html.escape(str(x)) for x in item['selection_instructions'])
+        count=int(item.get('completed_count',0));total=int(item['repetitions']);done=item.get('done',False)
+        source=html.escape(SUBJECT_NAMES[item['source_app']]);basis='本人の実測' if item['duration_basis']=='measured' else '仮の目安'
+        medals=''.join('<span class="cm-plan-medal cm-plan-medal-'+html.escape(m['grade'])+'" aria-label="'+GRADE_NAMES[m['grade']]+'メダル">'+GRADE_NAMES[m['grade']]+'</span>' for m in item.get('medals',[]))
+        if done:
+            action='<div class="cm-plan-finished" role="status"><span aria-hidden="true">🌸</span><strong>達成済み</strong></div>'
+        elif item.get('available_repetitions',0)<=0:
+            action='<span class="cm-plan-postponed">きょうは ここまで</span>'
+        elif item.get('plan_item_id') in links:
+            action='<a class="cm-plan-launch" data-source="'+html.escape(item['source_app'])+'" href="'+html.escape(links[item['plan_item_id']],quote=True)+'" target="_blank" rel="noopener noreferrer">'+('つづきを<br>はじめる' if count else 'この単元を<br>はじめる')+' ↗</a>'
+        else:
+            action='<span class="cm-plan-postponed">接続を確認して<br>更新してください</span>'
+        progress=f'<p class="cm-plan-progress">{count}／{total}回 完了</p>' if count else f'<p class="cm-plan-progress">{total}回チャレンジ</p>'
+        if count and len(item.get('medals',[]))<count and 'challenge' in item.get('mode_options',[]):
+            medals+='<span class="cm-plan-medal-pending">メダル反映待ち</span>'
+        parts.append(f'<li class="cm-plan-item'+(' cm-plan-done' if done else '')+'"><div class="cm-plan-top"><div class="cm-plan-order"><span class="cm-plan-number">'+str(n)+
+            f'</span></div><div class="cm-plan-content"><div class="cm-plan-subject">{source} · {category}</div><h3>{label} × {total}回</h3>'+
+            f'<p>{reason}</p><p>約{cm_minutes(item["duration_ms"]*max(0,total-count))}分 · {basis}</p>'+progress+
+            '</div><div class="cm-plan-action">'+action+'<div class="cm-plan-earned">'+medals+'</div></div></div>'+
+            '<p class="cm-plan-path">えらぶ順：'+steps+'</p></li>')
     return '<ol class="cm-plan-list">'+''.join(parts)+'</ol>'
 
 
@@ -2092,19 +2228,14 @@ def render_daily_plan(apps):
             st.caption('未計測の時間があります。完了した学習は単元の目安時間で補っており、残り時間は暫定です。')
         if p['reached']:
             st.success('きょうの目安にとどいたよ！')
-        elif p['items']:
-            st.markdown(cm_plan_items_html(p['items']),unsafe_allow_html=True)
-            sources = {i['source_app'] for i in p['items']}
-            for app in apps:
-                if app['id'] in sources:
-                    if app['ready']:
-                        try:
-                            st.link_button(app['title']+'を開く ↗',_make_launch_link(app),use_container_width=True)
-                        except (RuntimeError,ValueError):
-                            cm_error(app['title']+'の起動リンクを作れませんでした。')
-                    else:
-                        st.warning(app['title']+'のURLが未設定です。接続設定を確認してください。')
-            st.caption('アプリを開き、一覧の「えらぶ順」で単元を選んでください。単元への直接起動には未対応です。')
+        if p['items']:
+            try:
+                links=cm_plan_launch_links(p['items'],apps)
+            except (RuntimeError,ValueError):
+                links={}
+                cm_error('単元の起動リンクを作れませんでした。もう一度更新してください。')
+            st.markdown(cm_plan_items_html(p['items'],links),unsafe_allow_html=True)
+            st.caption('ボタンから単元を別タブで開きます。学習記録の同期後、戻ると達成状況を更新します。')
         if not p['sufficient']:
             st.warning(f'今の進度で選べる単元では、残りの目安に約{cm_minutes(p["remaining_ms"]-p["planned_ms"])}分足りません。'
                        '時間を埋めるために未習得の上級単元を追加しません。')
@@ -2162,8 +2293,8 @@ function init(p,d){
   d.addEventListener('click',event=>{
    const target=event.target?.closest?.('button,a');if(!target||target.disabled)return;
    const anchor=target.closest('a.cm-subject,a[href]');
-   if(anchor&&(anchor.classList.contains('cm-subject')||anchor.closest('[data-testid="stLinkButton"]'))){
-    const cls=anchor.className||'';let source=['soroban','kotoba','geometry'].find(s=>cls.includes('cm-subject-'+s));
+   if(anchor&&(anchor.classList.contains('cm-subject')||anchor.classList.contains('cm-plan-launch')||anchor.closest('[data-testid="stLinkButton"]'))){
+    const cls=anchor.className||'';let source=anchor.getAttribute?.('data-source')||['soroban','kotoba','geometry'].find(s=>cls.includes('cm-subject-'+s));
     // For native link buttons, infer app ONLY from the registered fixed title labels.
     if(!source){const label=(anchor.textContent||'').trim();source=label.startsWith('そろばん')?'soroban':label.startsWith('こくご')?'kotoba':label.startsWith('ずけい')?'geometry':'app'}
     state.add('external_app_open',source,{status:'destination_display_unmeasured'});state.persist();return;
@@ -2181,6 +2312,7 @@ function init(p,d){
   const observer=new p.MutationObserver(()=>state.check());observer.observe(d.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['data-cm-ready']});state.observer=observer;
   p.addEventListener('error',event=>{state.add('browser_error','script_or_resource',{status:'error',line:Number(event.lineno)||0});state.persist()},true);
   p.addEventListener('unhandledrejection',()=>{state.add('browser_error','unhandled_promise',{status:'error'});state.persist()});
+  d.addEventListener('visibilitychange',()=>{if(!d.hidden&&state.page==='home'&&Date.now()-(state.lastPlanRefresh||0)>5000){state.lastPlanRefresh=Date.now();state.notifyVisible?.()}});state.planVisibilityInstalled=true;
   p.addEventListener('pagehide',()=>state.persist());
   try{const observer=new p.PerformanceObserver(list=>{for(const entry of list.getEntries())state.add('long_task','main_thread',{duration_ms:Math.round(entry.duration),status:'observed'})});observer.observe({type:'longtask',buffered:true});state.longTaskObserver=observer}catch(e){}
  }
@@ -2188,12 +2320,14 @@ function init(p,d){
 }
 try{const p=window.parent,d=p.document;diag=p.__chokomanaPerformanceV1||(p.__chokomanaPerformanceV1=init(p,d))}
 catch(e){parentAccess=false;diag=init(window,null)}
+try{if(parentAccess&&!diag.planVisibilityInstalled){parent.document.addEventListener('visibilitychange',()=>{if(!parent.document.hidden&&diag.page==='home'&&Date.now()-(diag.lastPlanRefresh||0)>5000){diag.lastPlanRefresh=Date.now();diag.notifyVisible?.()}});diag.planVisibilityInstalled=true}}catch(e){}
 const download=document.getElementById('download'),result=document.getElementById('result');
-let appVersion='17',serverDropped=0;
+let appVersion='18',serverDropped=0;
 window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'17';
+ if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'18';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
