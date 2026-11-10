@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='20', default=None)
+        app_version='21', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -421,9 +421,9 @@ def _safe_json(data: object) -> str:
 
 
 def voice_panel(rows: list[dict]) -> str:
-    """Japanese stamp readings paced with an ascending 2-octave melody.
+    """One continuous Japanese reading over an ascending 2-octave melody.
 
-    Each note starts with its reading; the next stamp waits for speech to finish.
+    No per-stamp utterances or pauses; speech and melody start together.
     Playback requires an explicit browser gesture (Play button).
     """
     payload = [{
@@ -454,12 +454,12 @@ def voice_panel(rows: list[dict]) -> str:
 (()=>{
 const items=__STAMPS__, tiles=document.getElementById('tiles'),status=document.getElementById('status');
 const AC=window.AudioContext||window.webkitAudioContext;
-let ctx=null,raf=0,token=0,voice=null,timer=0;
+let ctx=null,raf=0,token=0,voice=null;
 items.forEach(x=>{const e=document.createElement('span');e.className='tile '+x.grade;const b=document.createElement('b');b.textContent=x.char;const sm=document.createElement('small');sm.textContent=x.reading;e.append(b,sm);tiles.appendChild(e)});
 const boxes=[...tiles.children];
 function mark(i){boxes.forEach((e,j)=>e.classList.toggle('active',j===i));if(i>=0&&boxes[i])boxes[i].scrollIntoView({block:'nearest',inline:'nearest',behavior:'smooth'})}
 function stop(message='停止しました'){
- token++;if(raf)cancelAnimationFrame(raf);raf=0;if(timer)clearTimeout(timer);timer=0;
+ token++;if(raf)cancelAnimationFrame(raf);raf=0;
  if(ctx){const old=ctx;ctx=null;old.close().catch(()=>{})}
  if('speechSynthesis' in window)window.speechSynthesis.cancel();voice=null;mark(-1);status.textContent=message;
 }
@@ -473,7 +473,7 @@ const play=document.getElementById('play');
 play.addEventListener('click',async()=>{
  if(!items.length){status.textContent='スタンプがありません';return}
  stop('読み上げ中…');const id=token;
- // Use the actual speech start/end instead of a separate fast melody clock.
+ // One uninterrupted utterance preserves the rhythm across all stamps.
  let ac=null,bus=null;
  if(AC){
   try{
@@ -485,29 +485,33 @@ play.addEventListener('click',async()=>{
   }catch(e){if(token!==id)return;ac=null;bus=null}
  }
  if(token!==id)return;
- const synth=window.speechSynthesis,canSpeak=!!(synth&&window.SpeechSynthesisUtterance),n=items.length;
+ const synth=window.speechSynthesis,canSpeak=!!(synth&&window.SpeechSynthesisUtterance),n=items.length,step=.30;
  const ja=canSpeak?(synth.getVoices().find(v=>v.lang&&v.lang.toLowerCase()==='ja-jp')||synth.getVoices().find(v=>v.lang&&v.lang.toLowerCase().startsWith('ja'))):null;
- let speechFailed=!canSpeak;
- function reading(i){
-  if(token!==id)return;
-  if(i>=n){voice=null;timer=0;mark(-1);status.textContent=n+'個のスタンプを確認しました'+(speechFailed?'（日本語音声は利用できません）':'');if(ctx===ac&&ac){ctx=null;ac.close().catch(()=>{})}return}
-  let began=false,ended=false,startTime=0;
-  function begin(){
-   if(token!==id||began)return;began=true;startTime=performance.now();mark(i);status.textContent=(i+1)+' / '+n+'　'+items[i].reading+'！';
-   if(ac&&bus){const f=196*Math.pow(4,i/Math.max(1,n-1));const previous=i?196*Math.pow(4,(i-1)/Math.max(1,n-1))*.94:null;note(ac,ac.currentTime+.015,f,previous,.32,bus)}
-  }
-  function end(){
-   if(token!==id||ended)return;ended=true;begin();
-   // At least 400ms per stamp, plus a short gap after the actual reading.
-   timer=setTimeout(()=>reading(i+1),Math.max(35,400-(performance.now()-startTime)));
-  }
-  if(canSpeak&&items[i].reading){
-   const u=new SpeechSynthesisUtterance(items[i].reading);u.lang='ja-JP';u.rate=1.15;u.pitch=1.5;u.volume=1;if(ja)u.voice=ja;
-   voice=u;u.onstart=begin;u.onend=end;u.onerror=e=>{if(token!==id||['canceled','interrupted'].includes(e.error))return;speechFailed=true;end()};
-   try{synth.speak(u)}catch(e){speechFailed=true;end()}
-  }else{begin();end()}
+ let speechFailed=!canSpeak,speechDone=!canSpeak,melodyDone=false,started=false;
+ function finish(){
+  if(token!==id||!speechDone||!melodyDone)return;
+  voice=null;mark(-1);status.textContent=n+'個のスタンプを確認しました'+(speechFailed?'（日本語音声は利用できません）':'');
+  if(ctx===ac&&ac){ctx=null;ac.close().catch(()=>{})}
  }
- reading(0);
+ function startMelody(){
+  if(token!==id||started)return;started=true;
+  const start=performance.now();
+  if(ac&&bus){const at=ac.currentTime+.015;items.forEach((x,i)=>{const f=196*Math.pow(4,i/Math.max(1,n-1));const previous=i?196*Math.pow(4,(i-1)/Math.max(1,n-1))*.94:null;note(ac,at+i*step,f,previous,step+.08,bus)})}
+  function tick(){
+   if(token!==id)return;
+   const elapsed=(performance.now()-start)/1000,i=Math.min(n-1,Math.floor(elapsed/step));mark(i);status.textContent=(i+1)+' / '+n+'　'+items[i].reading+'！';
+   if(elapsed<n*step+.13)raf=requestAnimationFrame(tick);else{raf=0;melodyDone=true;finish()}
+  }
+  raf=requestAnimationFrame(tick);
+ }
+ const text=items.map(x=>x.reading).join('');
+ if(canSpeak&&text){
+  const u=new SpeechSynthesisUtterance(text);u.lang='ja-JP';u.rate=1.65;u.pitch=1.5;u.volume=1;if(ja)u.voice=ja;
+  voice=u;u.onstart=startMelody;u.onend=()=>{if(token!==id)return;speechDone=true;startMelody();finish()};
+  u.onerror=e=>{if(token!==id||['canceled','interrupted'].includes(e.error))return;speechFailed=true;speechDone=true;startMelody();finish()};
+  try{synth.speak(u)}catch(e){speechFailed=true;speechDone=true;startMelody()}
+ }else{speechDone=true;startMelody()}
+
 });
 document.getElementById('stop').addEventListener('click',()=>stop());
 })();
@@ -2341,7 +2345,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'20';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'21';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
