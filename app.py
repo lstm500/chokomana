@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='18', default=None)
+        app_version='19', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -421,9 +421,9 @@ def _safe_json(data: object) -> str:
 
 
 def voice_panel(rows: list[dict]) -> str:
-    """Single continuous Japanese TTS utterance with ascending 2-octave melody.
+    """Japanese stamp readings paced with an ascending 2-octave melody.
 
-    No per-syllable speechSynthesis.speak: that introduced audible gaps.
+    Each note starts with its reading; the next stamp waits for speech to finish.
     Playback requires an explicit browser gesture (Play button).
     """
     payload = [{
@@ -454,12 +454,12 @@ def voice_panel(rows: list[dict]) -> str:
 (()=>{
 const items=__STAMPS__, tiles=document.getElementById('tiles'),status=document.getElementById('status');
 const AC=window.AudioContext||window.webkitAudioContext;
-let ctx=null,raf=0,token=0,voice=null;
+let ctx=null,raf=0,token=0,voice=null,timer=0;
 items.forEach(x=>{const e=document.createElement('span');e.className='tile '+x.grade;const b=document.createElement('b');b.textContent=x.char;const sm=document.createElement('small');sm.textContent=x.reading;e.append(b,sm);tiles.appendChild(e)});
 const boxes=[...tiles.children];
 function mark(i){boxes.forEach((e,j)=>e.classList.toggle('active',j===i));if(i>=0&&boxes[i])boxes[i].scrollIntoView({block:'nearest',inline:'nearest',behavior:'smooth'})}
 function stop(message='停止しました'){
- token++;if(raf)cancelAnimationFrame(raf);raf=0;
+ token++;if(raf)cancelAnimationFrame(raf);raf=0;if(timer)clearTimeout(timer);timer=0;
  if(ctx){const old=ctx;ctx=null;old.close().catch(()=>{})}
  if('speechSynthesis' in window)window.speechSynthesis.cancel();voice=null;mark(-1);status.textContent=message;
 }
@@ -473,27 +473,41 @@ const play=document.getElementById('play');
 play.addEventListener('click',async()=>{
  if(!items.length){status.textContent='スタンプがありません';return}
  stop('読み上げ中…');const id=token;
- // One continuous Japanese utterance, not one utterance per stamp.
- if('speechSynthesis' in window&&'SpeechSynthesisUtterance' in window){
-  const synth=window.speechSynthesis;const u=new SpeechSynthesisUtterance(items.map(x=>x.reading).join(''));
-  u.lang='ja-JP';u.rate=2.15;u.pitch=1.5;u.volume=1;
-  const ja=synth.getVoices().find(v=>v.lang&&v.lang.toLowerCase()==='ja-jp')||synth.getVoices().find(v=>v.lang&&v.lang.toLowerCase().startsWith('ja'));
-  if(ja)u.voice=ja;voice=u;u.onerror=e=>{if(id===token&&!['canceled','interrupted'].includes(e.error))status.textContent='日本語音声はこの端末で利用できません'};
-  synth.speak(u);
- }else{status.textContent='日本語音声はこの端末で利用できません'}
- if(!AC)return;
- const ac=new AC();ctx=ac;try{await ac.resume()}catch(e){if(id===token)status.textContent='メロディーを再生できません';return}
+ // Use the actual speech start/end instead of a separate fast melody clock.
+ let ac=null,bus=null;
+ if(AC){
+  try{
+   ac=new AC();ctx=ac;await ac.resume();
+   if(token!==id)return;
+   const compressor=ac.createDynamicsCompressor();compressor.threshold.value=-22;compressor.ratio.value=3;compressor.connect(ac.destination);
+   bus=ac.createGain();bus.gain.value=.60;bus.connect(compressor);
+   const delay=ac.createDelay(.25);delay.delayTime.value=.079;const wet=ac.createGain();wet.gain.value=.10;bus.connect(delay);delay.connect(wet).connect(compressor);
+  }catch(e){if(token!==id)return;ac=null;bus=null}
+ }
  if(token!==id)return;
- const compressor=ac.createDynamicsCompressor();compressor.threshold.value=-22;compressor.ratio.value=3;compressor.connect(ac.destination);
- const bus=ac.createGain();bus.gain.value=.60;bus.connect(compressor);
- const delay=ac.createDelay(.25);delay.delayTime.value=.079;const wet=ac.createGain();wet.gain.value=.10;bus.connect(delay);delay.connect(wet).connect(compressor);
- const n=items.length,step=n>25?.17:n>12?.19:.23,starts=[];let t=ac.currentTime+.05;
- items.forEach((x,i)=>{const f=196*Math.pow(4,i/Math.max(1,n-1));const previous=i?196*Math.pow(4,(i-1)/Math.max(1,n-1))*.94:null;starts.push(t);note(ac,t,f,previous,step+.08,bus);t+=step});
- const finished=t+.18;
- function tick(){if(token!==id||ctx!==ac)return;const now=ac.currentTime;let i=-1;for(let k=0;k<starts.length;k++)if(now>=starts[k])i=k;mark(i);
- if(i>=0)status.textContent=(i+1)+' / '+n+'　'+items[i].reading+'！';
- if(now<finished){raf=requestAnimationFrame(tick)}else{mark(-1);status.textContent=n+'個のスタンプを確認しました';raf=0}}
- raf=requestAnimationFrame(tick);
+ const synth=window.speechSynthesis,canSpeak=!!(synth&&window.SpeechSynthesisUtterance),n=items.length;
+ const ja=canSpeak?(synth.getVoices().find(v=>v.lang&&v.lang.toLowerCase()==='ja-jp')||synth.getVoices().find(v=>v.lang&&v.lang.toLowerCase().startsWith('ja'))):null;
+ let speechFailed=!canSpeak;
+ function reading(i){
+  if(token!==id)return;
+  if(i>=n){voice=null;timer=0;mark(-1);status.textContent=n+'個のスタンプを確認しました'+(speechFailed?'（日本語音声は利用できません）':'');if(ctx===ac&&ac){ctx=null;ac.close().catch(()=>{})}return}
+  let began=false,ended=false,startTime=0;
+  function begin(){
+   if(token!==id||began)return;began=true;startTime=performance.now();mark(i);status.textContent=(i+1)+' / '+n+'　'+items[i].reading+'！';
+   if(ac&&bus){const f=196*Math.pow(4,i/Math.max(1,n-1));const previous=i?196*Math.pow(4,(i-1)/Math.max(1,n-1))*.94:null;note(ac,ac.currentTime+.015,f,previous,.52,bus)}
+  }
+  function end(){
+   if(token!==id||ended)return;ended=true;begin();
+   // At least 650ms per stamp, plus a short gap after the actual reading.
+   timer=setTimeout(()=>reading(i+1),Math.max(80,650-(performance.now()-startTime)));
+  }
+  if(canSpeak&&items[i].reading){
+   const u=new SpeechSynthesisUtterance(items[i].reading);u.lang='ja-JP';u.rate=.85;u.pitch=1.5;u.volume=1;if(ja)u.voice=ja;
+   voice=u;u.onstart=begin;u.onend=end;u.onerror=e=>{if(token!==id||['canceled','interrupted'].includes(e.error))return;speechFailed=true;end()};
+   try{synth.speak(u)}catch(e){speechFailed=true;end()}
+  }else{begin();end()}
+ }
+ reading(0);
 });
 document.getElementById('stop').addEventListener('click',()=>stop());
 })();
@@ -2327,7 +2341,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'18';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'19';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
