@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='22', default=None)
+        app_version='23', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -522,13 +522,24 @@ function pcm(base64){const bytes=atob(base64),view=new DataView(new ArrayBuffer(
 function makeTrack(ac){
  const sr=24000,step=.32,lead=.06,finale=lead+items.length*step;
  const buffer=ac.createBuffer(1,Math.ceil((finale+.72)*sr),sr),out=buffer.getChannelData(0),beats=[];
- const scale=[0,2,4,7,9,12,14,16];
+ // Restore the original warm robot glide: 196Hz to 784Hz over the whole collection.
+ function melody(at,hz,previous,d){
+  const start=Math.round(at*sr);let phase=0;
+  for(let j=0;j<Math.ceil((d+.025)*sr)&&start+j<out.length;j++){
+   const t=j/sr,from=previous||hz*.94,f=t<.085?from*Math.pow(hz/from,t/.085):hz;phase+=2*Math.PI*f/sr;
+   const env=t<.027?Math.pow(.000625,1-t/.027):t<d-.055?1:Math.pow(.000625,(t-(d-.055))/.08);
+   // Band-limited saw + sine, with the old 1030Hz low-pass colour.
+   let saw=0;for(let k=1;k<=12&&k*f<sr/2;k++){const filter=1/Math.sqrt(1+Math.pow(k*f/1030,4));saw+=Math.sin(phase*k)/k*filter}
+   out[start+j]+=(.13*saw*2/Math.PI+.07*Math.sin(phase))*env;
+  }
+ }
  function tone(at,hz,d,gain){const start=Math.round(at*sr);for(let j=0;j<Math.ceil(d*sr)&&start+j<out.length;j++){const t=j/sr,e=Math.min(1,t/.006)*Math.exp(-t*9);out[start+j]+=gain*e*(Math.sin(2*Math.PI*hz*t)+.18*Math.sin(2*Math.PI*hz*2*t))}}
  items.forEach((x,i)=>{
   const at=lead+i*step,start=Math.round(at*sr),clip=pcm(clips[key(x.reading)]);beats.push(at);
   // Voice and instruments are mixed into the same PCM samples, not separate clocks.
-  for(let j=0;j<clip.length&&start+j<out.length;j++)out[start+j]+=clip[j]*.88;
-  tone(at,196*Math.pow(2,scale[i%scale.length]/12),.26,.085);
+  for(let j=0;j<clip.length&&start+j<out.length;j++)out[start+j]+=clip[j]*.80;
+  const hz=196*Math.pow(4,i/Math.max(1,items.length-1)),previous=i?196*Math.pow(4,(i-1)/Math.max(1,items.length-1))*.94:null;
+  melody(at,hz,previous,step+.08);
   const count=Math.round(sr*.045);for(let j=0;j<count;j++){const t=j/sr;out[start+j]+=.035*Math.sin(2*Math.PI*82*t)*Math.exp(-t*90)}
  });
  // A short, bright reward after the last medal; no extra achievement is recorded.
@@ -2393,7 +2404,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'22';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'23';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
