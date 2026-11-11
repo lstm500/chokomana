@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='31', default=None)
+        app_version='33', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -521,15 +521,20 @@ const key=s=>String(s).normalize('NFKC').trim().replace(/[ァ-ヶ]/g,c=>String.f
 function pcm(base64){
  const bytes=atob(base64),view=new DataView(new ArrayBuffer(bytes.length));for(let i=0;i<bytes.length;i++)view.setUint8(i,bytes.charCodeAt(i));
  const raw=new Float32Array(bytes.length/2);for(let i=0;i<raw.length;i++)raw[i]=view.getInt16(i*2,true)/32768;
- // Remove only near-silent edges; keep the spoken waveform and playback rate intact.
- let first=0,last=raw.length;while(first<last-1&&Math.abs(raw[first])<.001)first++;while(last>first+1&&Math.abs(raw[last-1])<.001)last--;
+ // Detect quiet margins by short-window RMS, not the first isolated waveform peak.
+ // Keep edge padding and limit trimming to 4% per end so consonants remain intact.
+ const windowSize=60,levels=[];let peak=0;
+ for(let i=0;i<raw.length;i+=windowSize){let energy=0,n=Math.min(windowSize,raw.length-i);for(let j=0;j<n;j++)energy+=raw[i+j]*raw[i+j];const rms=Math.sqrt(energy/Math.max(1,n));levels.push(rms);peak=Math.max(peak,rms)}
+ const threshold=Math.max(.0008,peak*.012),maxTrim=Math.floor(raw.length*.04);
+ let left=0,right=levels.length;while(left<right&&levels[left]<threshold)left++;while(right>left&&levels[right-1]<threshold)right--;
+ const first=Math.min(maxTrim,Math.max(0,(left-1)*windowSize)),last=Math.max(raw.length-maxTrim,Math.min(raw.length,(right+1)*windowSize));
  return raw.slice(first,last);
 }
 function stampIndex(beats,elapsed){let low=0,high=beats.length;while(low<high){const mid=(low+high)>>1;if(beats[mid]<=elapsed)low=mid+1;else high=mid}return low-1}
 function makeTrack(ac){
  const sr=24000,leadFrames=Math.round(.06*sr),voiceClips=items.map(x=>pcm(clips[key(x.reading)])),offsets=[];
  let cursor=leadFrames;
- voiceClips.forEach((clip,i)=>{offsets.push(cursor);cursor+=clip.length;if(i+1<voiceClips.length)cursor-=Math.min(Math.round(.006*sr),Math.floor(clip.length/4),Math.floor(voiceClips[i+1].length/4))});
+ voiceClips.forEach((clip,i)=>{offsets.push(cursor);cursor+=clip.length;if(i+1<voiceClips.length)cursor-=Math.min(Math.round(.045*sr),Math.floor(clip.length/4),Math.floor(voiceClips[i+1].length/4))});
  const finale=(cursor+Math.round(.025*sr))/sr,beats=offsets.map(x=>x/sr);
  const buffer=ac.createBuffer(1,Math.ceil((finale+.72)*sr),sr),out=buffer.getChannelData(0);
  // Restore the original warm robot glide: 196Hz to 784Hz over the whole collection.
@@ -547,8 +552,10 @@ function makeTrack(ac){
  items.forEach((x,i)=>{
   const start=offsets[i],at=beats[i],clip=voiceClips[i],span=(i+1<offsets.length?offsets[i+1]-start:clip.length)/sr;
   // Voice and instruments are mixed into the same PCM samples, not separate clocks.
-  const fade=Math.min(Math.round(.006*sr),Math.floor(clip.length/4));
-  for(let j=0;j<clip.length&&start+j<out.length;j++){const edge=fade?Math.min(1,j/fade,(clip.length-1-j)/fade):1;out[start+j]+=clip[j]*.80*edge}
+  // Equal-power joins avoid the dip of a linear fade at each word boundary.
+  const fadeIn=i?Math.min(Math.round(.045*sr),Math.floor(clip.length/4),Math.floor(voiceClips[i-1].length/4)):Math.min(Math.round(.004*sr),Math.floor(clip.length/4));
+  const fadeOut=i+1<voiceClips.length?Math.min(Math.round(.045*sr),Math.floor(clip.length/4),Math.floor(voiceClips[i+1].length/4)):Math.min(Math.round(.004*sr),Math.floor(clip.length/4));
+  for(let j=0;j<clip.length&&start+j<out.length;j++){const blend=Math.min(1,fadeIn?j/fadeIn:1,fadeOut?(clip.length-1-j)/fadeOut:1),edge=Math.sin(blend*Math.PI/2);out[start+j]+=clip[j]*.80*edge}
   const hz=196*Math.pow(4,i/Math.max(1,items.length-1)),previous=i?196*Math.pow(4,(i-1)/Math.max(1,items.length-1))*.94:null;
   melody(at,hz,previous,span+.08);
   const count=Math.round(sr*.045);for(let j=0;j<count;j++){const t=j/sr;out[start+j]+=.035*Math.sin(2*Math.PI*82*t)*Math.exp(-t*90)}
@@ -2520,7 +2527,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'31';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'33';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
