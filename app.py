@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='23', default=None)
+        app_version='24', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -1751,7 +1751,7 @@ def cm_launch_url(base,code):
     return urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode(query),''))
 
 # Adaptive planning uses observed responses, never medal colors or a language model's guesses.
-CM_PLANNER_VERSION = 'adaptive-1'
+CM_PLANNER_VERSION = 'adaptive-2-balanced'
 
 
 def cm_plan_rows(table, params):
@@ -1877,8 +1877,12 @@ def cm_plan_menus(catalog, age):
         duration = p.get('estimated_duration_ms')
         if not isinstance(duration, (float, int)) or not math.isfinite(duration) or not 0 < duration <= 14400000:
             continue
-        if not isinstance(p.get('selection_instructions'), list) or not p['selection_instructions']:
+        instructions=p.get('selection_instructions')
+        # Older geometry catalogs store the same selection path as one sentence.
+        if isinstance(instructions,str):instructions=[instructions.strip()] if instructions.strip() else []
+        if not isinstance(instructions,list) or not instructions or not all(isinstance(x,str) and x.strip() for x in instructions):
             continue
+        p={**p,'selection_instructions':instructions}
         menus.append({**p, 'source_app': row['source_app'], 'menu_id': row['entry_id'],
                       'content_version': row['content_version']})
     return menus
@@ -2085,34 +2089,83 @@ def cm_plan_candidates(menus, analysis, today):
     return candidates
 
 
-def cm_build_daily_plan(candidates, remaining_ms, today_counts):
-    """Bounded knapsack in 10-second units, rounding UP to enforce the duration cap."""
+def cm_build_daily_plan(candidates, remaining_ms, today_counts, subject_spent_ms=None):
+    """Fit the time budget, then balance total daily time across available subjects."""
     import math
-    capacity = max(0, int(remaining_ms//10000))
-    if capacity==0:
-        return []
-    # 1..100 years accepted in settings; use sparse DP and cap study-item count naturally.
-    dp = {0:(0.0, [])}
-    ordered = sorted(candidates,key=lambda c:(c['source_app'],c['menu_id']))
-    for candidate in ordered:
-        units = math.ceil(candidate['duration_ms']/10000)
-        completed = today_counts.get(candidate['key'],0)
-        choices = max(0,3-completed)
-        previous = list(dp.items())
-        for used,(value,path) in previous:
-            for count in range(1,choices+1):
-                total = used+units*count
-                if total>capacity:
-                    break
-                bonus = sum((1,.65,.35)[completed+i] for i in range(count))
-                quality = value+candidate['score']*units*bonus
-                if total not in dp or quality>dp[total][0]:
-                    dp[total]=(quality,path+[(candidate,count)])
-    # Fit at least 95% if achievable; otherwise return the honest shortfall.
-    lower = math.ceil(remaining_ms*.95/10000)
-    feasible = [u for u in dp if u>=lower]
-    best = max(feasible,key=lambda u:(dp[u][0],u)) if feasible else max(dp)
-    return [{**c,'repetitions':count,'planned_ms':c['duration_ms']*count} for c,count in dp[best][1]]
+    from collections import defaultdict
+    capacity=max(0,int(remaining_ms//10000))
+    if not capacity:return []
+    spent=subject_spent_ms or {}
+    grouped=defaultdict(list)
+    for c in candidates:
+        if c.get('duration_ms',0)>0:grouped[c['source_app']].append(c)
+    sources=[s for s in SUBJECT_NAMES if s in grouped or spent.get(s,0)>0]
+    if not sources:return []
+    target=(remaining_ms+sum(spent.get(s,0) for s in sources))/len(sources)
+    # First retain the best learning priority for each feasible time within a subject.
+    options={}
+    for source in sources:
+        dp={0:(0.0,[])}
+        for c in sorted(grouped[source],key=lambda c:(c['menu_id'],c.get('plan_item_id',''))):
+            units=math.ceil(c['duration_ms']/10000)
+            completed=today_counts.get(c['key'],0)
+            choices=max(0,3-completed)
+            for used,(value,path) in list(dp.items()):
+                for count in range(1,choices+1):
+                    total=used+units*count
+                    if total>capacity:break
+                    bonus=sum((1,.65,.35)[completed+i] for i in range(count))
+                    quality=value+c['score']*units*bonus
+                    if total not in dp or quality>dp[total][0]:dp[total]=(quality,path+[(c,count)])
+        options[source]=dp
+    # Coverage and time balance take precedence over the number of menus or their scores.
+    combined={0:((0,0.0,0.0),[])}
+    for source in sources:
+        nxt={}
+        for used,(value,path) in combined.items():
+            for amount,(quality,selection) in options[source].items():
+                total=used+amount
+                if total>capacity:continue
+                daily=spent.get(source,0)+amount*10000
+                score=(value[0]+int(daily>0),value[1]-((daily-target)/max(target,1))**2,value[2]+quality)
+                if total not in nxt or score>nxt[total][0]:nxt[total]=(score,path+selection)
+        combined=nxt
+    lower=math.ceil(remaining_ms*.95/10000)
+    feasible=[u for u in combined if u>=lower]
+    best=max(feasible,key=lambda u:(combined[u][0],u)) if feasible else max(combined)
+    result=defaultdict(list)
+    for c,count in combined[best][1]:result[c['source_app']].append({**c,'repetitions':count,'planned_ms':c['duration_ms']*count})
+    # Show one card per subject before the second card of any subject.
+    ordered=[]
+    for rows in result.values():rows.sort(key=lambda c:(-c['score'],c['menu_id']))
+    while any(result.values()):
+        for source in SUBJECT_NAMES:
+            if result[source]:ordered.append(result[source].pop(0))
+    return ordered
+
+
+def cm_plan_subject_time(events, menus, profile, today, total_ms):
+    """Same measured/estimated accounting as the daily total, split by subject."""
+    result={s:cm_plan_analyze([e for e in events if e['source_app']==s],
+        [m for m in menus if m['source_app']==s],profile,today)['spent_ms'] for s in SUBJECT_NAMES}
+    # Concurrent tabs must not multiply the overall daily study time.
+    summed=sum(result.values())
+    if summed>total_ms and summed:
+        scaled={s:int(ms*total_ms/summed) for s,ms in result.items()}
+        winner=max(result,key=result.get);scaled[winner]+=total_ms-sum(scaled.values());result=scaled
+    return result
+
+
+def cm_plan_started(item, events):
+    for e in events:
+        if e.get('event_type')!='session_started' or e.get('source_app')!=item['source_app']:continue
+        p=e.get('payload') or {}
+        if p.get('plan_item_id')==item['plan_item_id']:return True
+        if (not p.get('plan_item_id') and p.get('menu_id')==item['menu_id']
+                and e.get('content_version')==item['content_version']):
+            when=cm_plan_date(e.get('occurred_at'));assigned=cm_plan_date(item.get('assigned_at'))
+            if when and assigned and when>=assigned:return True
+    return False
 
 
 def cm_reconcile_plan(items, events, stamps, profile, day, generated_at):
@@ -2196,18 +2249,30 @@ def cm_load_daily_plan(age, allowed_sources=None):
     previous=found[0] if found else None
     old=previous['payload'] if previous else {}
     analysis=cm_plan_analyze(events,menus,profile,today)
+    subject_spent=cm_plan_subject_time(events,menus,profile,today,analysis['spent_ms'])
     target=age*10*60000;remaining=max(0,target-analysis['spent_ms']);reached=analysis['spent_ms']>=target*.95
     candidates=cm_plan_candidates(menus,analysis,today)
     if allowed_sources is not None:candidates=[c for c in candidates if c['source_app'] in allowed_sources]
+    balance_sources=sorted({c['source_app'] for c in candidates})
+    rebalance=(old.get('planner_version')!=CM_PLANNER_VERSION or old.get('balance_sources')!=balance_sources or old.get('age')!=age)
     created=old.get('generated_at') or now
     items=[]
     for row in old.get('items',[]):
         # Preserve card IDs/order through polling, navigation and repeat completions.
         item={**row};item.setdefault('plan_item_id',str(uuid4()));item.setdefault('assigned_at',created);items.append(item)
     items=cm_reconcile_plan(items,events,stamps,profile,today,created)
-    # Append new work only after all already assigned cards have been completed.
-    if not reached and (not items or all(i['done'] for i in items)):
-        for row in cm_build_daily_plan(candidates,remaining,analysis['today_counts']):
+    # Upgrade only untouched work. Preserve finished cards, partial work, IDs and medals.
+    if rebalance:
+        items=[i for i in items if i['completed_count'] or cm_plan_started(i,events)]
+    if not reached and (rebalance or not items or all(i['done'] for i in items)):
+        committed=dict(subject_spent);counts=dict(analysis['today_counts']);reserved=0
+        for i in items:
+            left=max(0,i['repetitions']-i['completed_count'])
+            if not left:continue
+            amount=i['duration_ms']*left;reserved+=amount
+            committed[i['source_app']]=committed.get(i['source_app'],0)+amount
+            key=(i['source_app'],i['menu_id'],i['content_version']);counts[key]=counts.get(key,0)+left
+        for row in cm_build_daily_plan(candidates,max(0,remaining-reserved),counts,committed):
             items.append({**row,'plan_item_id':str(uuid4()),'assigned_at':now,'completed_count':0,
                 'completed_attempts':[],'medals':[],'done':False})
     # Allocate only the remaining budget, without removing finished or postponed cards.
@@ -2216,11 +2281,11 @@ def cm_load_daily_plan(age, allowed_sources=None):
         if i['done']:continue
         key=(i['source_app'],i['menu_id'],i['content_version'])
         pending.append({**i,'key':key});limits[key]=3-(i['repetitions']-i['completed_count'])
-    selected=[] if reached else cm_build_daily_plan(pending,remaining,limits)
+    selected=[] if reached else cm_build_daily_plan(pending,remaining,limits,subject_spent)
     allocations={i['plan_item_id']:i['repetitions'] for i in selected}
     for i in items:i['available_repetitions']=allocations.get(i['plan_item_id'],0)
     planned=sum(i['duration_ms']*i['available_repetitions'] for i in items)
-    payload={'planner_version':CM_PLANNER_VERSION,'plan_schema':2,'age':age,'target_ms':target,
+    payload={'planner_version':CM_PLANNER_VERSION,'plan_schema':2,'balance_sources':balance_sources,'subject_spent_ms':subject_spent,'age':age,'target_ms':target,
         'spent_ms':analysis['spent_ms'],'measured_ms':analysis['measured_ms'],'estimated_ms':analysis['estimated_ms'],
         'missing_time':analysis['missing_time'],'partial_time':analysis['partial_time'],'remaining_ms':remaining,
         'planned_ms':planned,'items':items,'sources':sorted({m['source_app'] for m in menus}),
@@ -2286,7 +2351,7 @@ def render_daily_plan(apps):
             return
         refresh = cm_button('学習記録を更新',key='cm_plan_refresh',use_container_width=True)
         cached = st.session_state.get('cm_plan_snapshot')
-        cache_key = (st.session_state['cm_profile'],now_jst().date().isoformat(),age)
+        cache_key = (st.session_state['cm_profile'],now_jst().date().isoformat(),age,CM_PLANNER_VERSION)
         if refresh or not cached or cached['key']!=cache_key or time.time()-cached['at']>60:
             try:
                 with st.spinner('学習記録から、今日の内容を選んでいます…'):
@@ -2320,6 +2385,7 @@ def render_daily_plan(apps):
         if pending:
             st.caption('単元データ未登録：'+'・'.join(pending)+'。登録後、自動選定の対象になります。')
         with st.expander('選び方・時間の目安について'):
+            st.write('こくご・そろばん・ずけいの3教科から、今日すでに学習した時間も含めて偏りが小さくなるように選びます。選べる単元が少ない教科は、他の教科で補います。')
             st.write('初回回答の正答率とアプリ内のヒント利用を単元別に確認します。十分な成績が複数回そろうと次の単元へ進み、つまずいた単元は繰り返します。')
             st.write('復習間隔は正答が続くと1→3→7→14→30日へ延ばし、つまずくと翌日に戻します。効果を保証する日数ではなく、成績に応じて調整する初期設定です。')
             st.write('年齢×10分はこのアプリの設定です。休憩は学習時間に含めず、まとめて続ける必要はありません。予定は残り時間の95〜100％を目指し、1日の目安の95％に達したら終了にします。同じ単元は1日3回までにします。')
@@ -2404,7 +2470,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'23';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'24';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
