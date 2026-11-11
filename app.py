@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='30', default=None)
+        app_version='31', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -518,10 +518,20 @@ function stop(message='停止しました'){
  if('speechSynthesis' in window)window.speechSynthesis.cancel();voice=null;mark(-1);tiles.classList.remove('celebrate');status.textContent=message;
 }
 const key=s=>String(s).normalize('NFKC').trim().replace(/[ァ-ヶ]/g,c=>String.fromCharCode(c.charCodeAt(0)-96));
-function pcm(base64){const bytes=atob(base64),view=new DataView(new ArrayBuffer(bytes.length));for(let i=0;i<bytes.length;i++)view.setUint8(i,bytes.charCodeAt(i));const a=new Float32Array(bytes.length/2);for(let i=0;i<a.length;i++)a[i]=view.getInt16(i*2,true)/32768;return a}
+function pcm(base64){
+ const bytes=atob(base64),view=new DataView(new ArrayBuffer(bytes.length));for(let i=0;i<bytes.length;i++)view.setUint8(i,bytes.charCodeAt(i));
+ const raw=new Float32Array(bytes.length/2);for(let i=0;i<raw.length;i++)raw[i]=view.getInt16(i*2,true)/32768;
+ // Remove only near-silent edges; keep the spoken waveform and playback rate intact.
+ let first=0,last=raw.length;while(first<last-1&&Math.abs(raw[first])<.001)first++;while(last>first+1&&Math.abs(raw[last-1])<.001)last--;
+ return raw.slice(first,last);
+}
+function stampIndex(beats,elapsed){let low=0,high=beats.length;while(low<high){const mid=(low+high)>>1;if(beats[mid]<=elapsed)low=mid+1;else high=mid}return low-1}
 function makeTrack(ac){
- const sr=24000,step=.32,lead=.06,finale=lead+items.length*step;
- const buffer=ac.createBuffer(1,Math.ceil((finale+.72)*sr),sr),out=buffer.getChannelData(0),beats=[];
+ const sr=24000,leadFrames=Math.round(.06*sr),voiceClips=items.map(x=>pcm(clips[key(x.reading)])),offsets=[];
+ let cursor=leadFrames;
+ voiceClips.forEach((clip,i)=>{offsets.push(cursor);cursor+=clip.length;if(i+1<voiceClips.length)cursor-=Math.min(Math.round(.006*sr),Math.floor(clip.length/4),Math.floor(voiceClips[i+1].length/4))});
+ const finale=(cursor+Math.round(.025*sr))/sr,beats=offsets.map(x=>x/sr);
+ const buffer=ac.createBuffer(1,Math.ceil((finale+.72)*sr),sr),out=buffer.getChannelData(0);
  // Restore the original warm robot glide: 196Hz to 784Hz over the whole collection.
  function melody(at,hz,previous,d){
   const start=Math.round(at*sr);let phase=0;
@@ -535,17 +545,18 @@ function makeTrack(ac){
  }
  function tone(at,hz,d,gain){const start=Math.round(at*sr);for(let j=0;j<Math.ceil(d*sr)&&start+j<out.length;j++){const t=j/sr,e=Math.min(1,t/.006)*Math.exp(-t*9);out[start+j]+=gain*e*(Math.sin(2*Math.PI*hz*t)+.18*Math.sin(2*Math.PI*hz*2*t))}}
  items.forEach((x,i)=>{
-  const at=lead+i*step,start=Math.round(at*sr),clip=pcm(clips[key(x.reading)]);beats.push(at);
+  const start=offsets[i],at=beats[i],clip=voiceClips[i],span=(i+1<offsets.length?offsets[i+1]-start:clip.length)/sr;
   // Voice and instruments are mixed into the same PCM samples, not separate clocks.
-  for(let j=0;j<clip.length&&start+j<out.length;j++)out[start+j]+=clip[j]*.80;
+  const fade=Math.min(Math.round(.006*sr),Math.floor(clip.length/4));
+  for(let j=0;j<clip.length&&start+j<out.length;j++){const edge=fade?Math.min(1,j/fade,(clip.length-1-j)/fade):1;out[start+j]+=clip[j]*.80*edge}
   const hz=196*Math.pow(4,i/Math.max(1,items.length-1)),previous=i?196*Math.pow(4,(i-1)/Math.max(1,items.length-1))*.94:null;
-  melody(at,hz,previous,step+.08);
+  melody(at,hz,previous,span+.08);
   const count=Math.round(sr*.045);for(let j=0;j<count;j++){const t=j/sr;out[start+j]+=.035*Math.sin(2*Math.PI*82*t)*Math.exp(-t*90)}
  });
  // A short, bright reward after the last medal; no extra achievement is recorded.
  [392,493.883,587.33,783.99].forEach((hz,i)=>tone(finale+i*.09,hz,.4,.095));
  for(let i=0;i<out.length;i++)out[i]=Math.max(-.98,Math.min(.98,out[i]));
- return {buffer,beats,finale,step};
+ return {buffer,beats,finale};
 }
 function voiceOnly(id){
  if(!window.speechSynthesis||!window.SpeechSynthesisUtterance){status.textContent='この端末では音声を再生できません';return}
@@ -566,7 +577,7 @@ document.getElementById('play').addEventListener('click',async()=>{
   const track=makeTrack(ac),s=ac.createBufferSource();s.buffer=track.buffer;s.connect(ac.destination);source=s;
   const at=ac.currentTime+.04;
   s.onended=()=>{if(token!==id||source!==s)return;if(raf)cancelAnimationFrame(raf);raf=0;source=null;mark(-1);tiles.classList.add('celebrate');status.textContent=items.length+'こ あつめたね！ また あつめよう！';if(ctx===ac){ctx=null;ac.close().catch(()=>{})}};
-  function tick(){if(token!==id||source!==s)return;const elapsed=ac.currentTime-at;if(elapsed>=track.finale){mark(-1);tiles.classList.add('celebrate');status.textContent='やったね！ '+items.length+'この スタンプ！'}else if(elapsed>=track.beats[0]){const i=Math.min(items.length-1,Math.floor((elapsed-track.beats[0])/track.step));mark(i);status.textContent=(i+1)+' / '+items.length+'　'+items[i].reading+'！'}raf=requestAnimationFrame(tick)}
+  function tick(){if(token!==id||source!==s)return;const elapsed=ac.currentTime-at;if(elapsed>=track.finale){mark(-1);tiles.classList.add('celebrate');status.textContent='やったね！ '+items.length+'この スタンプ！'}else if(elapsed>=track.beats[0]){const i=stampIndex(track.beats,elapsed);mark(i);status.textContent=(i+1)+' / '+items.length+'　'+items[i].reading+'！'}raf=requestAnimationFrame(tick)}
   s.start(at);raf=requestAnimationFrame(tick);
  }catch(e){if(token!==id)return;stop('音声を再生できませんでした。もう一度押してください')}
 });
@@ -2509,7 +2520,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'30';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'31';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
