@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='25', default=None)
+        app_version='27', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -824,54 +824,43 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .st-key-cm_home_heading [data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:minmax(0,1fr) 88px;gap:10px!important;align-items:center}
 .st-key-cm_home_heading [data-testid="stColumn"]{width:100%!important;min-width:0!important}
 
-/* Assignment cards: scoped resets prevent Markdown list/link styles leaking in. */
-.stApp .cm-plan-list{list-style:none!important;margin:20px 0!important;padding:0!important;display:grid;gap:16px}
-.stApp .cm-plan-list>.cm-plan-item{box-sizing:border-box;list-style:none!important;display:block;margin:0!important;padding:18px!important;min-width:0;border:1px solid #d6e1da;border-radius:16px;background:#fff;color:#233c3c}
+/* Compact assignment tiles keep essential information visible in two or three columns. */
+.stApp .cm-plan-list{box-sizing:border-box;list-style:none!important;display:grid;grid-template-columns:1fr 1fr;align-items:stretch;gap:12px;width:100%;margin:18px 0!important;padding:0!important}
+.stApp .cm-plan-list>.cm-plan-item{box-sizing:border-box;list-style:none!important;display:flex;flex-direction:column;gap:9px;min-width:0;margin:0!important;padding:13px!important;border:1px solid #d6e1da;border-radius:14px;background:#fff;color:#233c3c}
 .stApp .cm-plan-item *{box-sizing:border-box}
-.stApp .cm-plan-top{display:table;table-layout:fixed;width:100%;min-width:0}
-.stApp .cm-plan-order{display:table-cell;vertical-align:top;width:42px;padding:0 14px 0 0}
-.stApp .cm-plan-number{display:block;width:28px;height:28px;line-height:28px;margin:0;border-radius:50%;background:#e5efe8;color:#225b4e;text-align:center;font-size:14px;font-weight:800}
-.stApp .cm-plan-content{display:table-cell;vertical-align:top;min-width:0;padding:0;overflow-wrap:anywhere}
-.stApp .cm-plan-subject{font-size:12px;line-height:1.5;color:#61756e;margin:0 0 5px}
-.stApp .cm-plan-item h3{font-size:16px!important;line-height:1.6!important;margin:0 0 10px!important;padding:0!important;overflow-wrap:anywhere;color:#233c3c!important}
-.stApp .cm-plan-times{display:inline-block;white-space:nowrap}
-.stApp .cm-plan-item p{font-size:13px;line-height:1.65;margin:4px 0!important;color:#526b60;overflow-wrap:anywhere}
-.stApp .cm-plan-item p.cm-plan-progress{margin-top:10px!important;font-weight:700;color:#245a4b}
-.stApp .cm-plan-action{display:table-cell;vertical-align:middle;width:138px;padding:0 0 0 14px;text-align:center}
-.stApp a.cm-plan-launch,.stApp a.cm-plan-launch:visited{display:flex;align-items:center;justify-content:center;gap:4px;width:100%;min-height:48px;padding:10px 8px;border:1px solid #287466;border-radius:12px;background:#287466;color:#fff!important;-webkit-text-fill-color:#fff!important;text-decoration:none!important;font-size:14px;line-height:1.5;font-weight:700;white-space:nowrap}
-.stApp a.cm-plan-launch:hover{background:#215e53;border-color:#215e53;text-decoration:none!important}
-.stApp a.cm-plan-launch:focus-visible{outline:3px solid #86b5a3;outline-offset:3px}
-.stApp .cm-plan-finished{color:#245a4b;display:block;text-align:center}
-.stApp .cm-plan-finished>span{display:block;margin-bottom:5px;font-size:28px;line-height:1.2}
-.stApp .cm-plan-finished strong{font-size:13px}
-.stApp .cm-plan-earned{display:flex;flex-wrap:wrap;justify-content:center;gap:4px;margin-top:8px}
+.stApp .cm-plan-heading{display:flex;align-items:center;gap:7px;min-width:0}
+.stApp .cm-plan-number{display:block;flex:0 0 23px;width:23px;height:23px;line-height:23px;border-radius:50%;background:#e5efe8;color:#225b4e;text-align:center;font-size:12px;font-weight:800}
+.stApp .cm-plan-subject{font-size:11px;line-height:1.5;color:#61756e;overflow-wrap:anywhere;min-width:0}
+.stApp .cm-plan-item h3{font-size:14px!important;line-height:1.55!important;min-height:2.4em;margin:0!important;padding:0!important;color:#233c3c!important;overflow-wrap:anywhere;word-break:normal}
+.stApp .cm-plan-info{display:block;font-size:12px;line-height:1.6;color:#526b60}
+.stApp .cm-plan-time{display:block}
+.stApp .cm-plan-progress{display:block;font-size:12px;font-weight:700;color:#245a4b}
+.stApp .cm-plan-status{min-height:24px;display:block}
+.stApp .cm-plan-status:empty{display:none}
+.stApp .cm-plan-finished{display:block;font-size:11px;line-height:1.5;font-weight:700;color:#245a4b;margin:0 0 5px}
+.stApp .cm-plan-earned{display:flex;flex-wrap:wrap;gap:3px;align-items:center;margin:0}
 .stApp .cm-plan-earned:empty{display:none}
-.stApp .cm-plan-medal{width:26px;height:26px;display:inline-block;line-height:20px;text-align:center;vertical-align:middle;margin:0;border-radius:50%;font-size:11px;font-weight:800;border:3px double}
+.stApp .cm-plan-medal{display:inline-block;width:22px;height:22px;line-height:16px;border:3px double;border-radius:50%;font-size:10px;font-weight:800;text-align:center;margin:0}
 .stApp .cm-plan-medal-gold{background:#f5d361;color:#69470a;border-color:#bd8c26}
 .stApp .cm-plan-medal-silver{background:#d8e0e8;color:#3d5266;border-color:#9aa9b8}
 .stApp .cm-plan-medal-bronze{background:#d99c6e;color:#60391e;border-color:#ad7044}
 .stApp .cm-plan-medal-white{background:#f8f9fb;color:#4c5b6a;border-color:#b9c2cb}
-.stApp .cm-plan-postponed,.stApp .cm-plan-medal-pending{font-size:12px;line-height:1.6;color:#61756e;white-space:normal}
+.stApp .cm-plan-action{margin-top:auto;min-width:0;padding:0}
+.stApp a.cm-plan-launch,.stApp a.cm-plan-launch:visited{display:flex;align-items:center;justify-content:center;gap:4px;min-height:46px;width:100%;padding:9px 5px;border:1px solid #287466;border-radius:11px;background:#287466;color:#fff!important;-webkit-text-fill-color:#fff!important;text-decoration:none!important;white-space:nowrap;font-size:13px;line-height:1.5;font-weight:700}
+.stApp a.cm-plan-launch:hover{background:#215e53;border-color:#215e53;text-decoration:none!important}
+.stApp a.cm-plan-launch:focus-visible{outline:3px solid #86b5a3;outline-offset:3px}
+.stApp a.cm-plan-launch.cm-plan-retry,.stApp a.cm-plan-launch.cm-plan-retry:visited{background:#fff3d6;border-color:#d8bf79;color:#775916!important;-webkit-text-fill-color:#775916!important;font-size:12px}
+.stApp a.cm-plan-launch.cm-plan-retry:hover{background:#f8e7bc;border-color:#c5a55a}
 .stApp .cm-plan-list>.cm-plan-done{background:#f2f8f4;border-color:#b8d4c4}
-.stApp .cm-plan-help{display:block;min-width:0;margin:12px 0 0 42px;padding:0;border:0;background:transparent;color:#61756e}
-.stApp .cm-plan-help:not([open]) .cm-plan-path{display:none}
-.stApp .cm-plan-help summary{display:list-item;list-style-position:inside;cursor:pointer;font-size:11px;line-height:1.6;min-height:24px;padding:3px 0;color:#61756e}
-.stApp .cm-plan-help summary:focus-visible{outline:2px solid #86b5a3;outline-offset:3px;border-radius:4px}
-.stApp .cm-plan-item .cm-plan-path{margin:6px 0 0!important;padding:0;border:0;font-size:12px;line-height:1.7;color:#61756e}
-@media(max-width:640px){
- .stApp .cm-plan-list{gap:14px}
- .stApp .cm-plan-list>.cm-plan-item{padding:16px 14px!important}
- .stApp .cm-plan-order{width:36px;padding-right:10px}
- .stApp .cm-plan-action{width:98px;padding-left:10px}
- .stApp .cm-plan-number{width:26px;height:26px;line-height:26px;font-size:13px}
- .stApp .cm-plan-item h3{font-size:15px!important;margin-bottom:8px!important}
- .stApp .cm-plan-subject{font-size:11px}
- .stApp a.cm-plan-launch,.stApp a.cm-plan-launch:visited{min-height:46px;font-size:13px;padding:9px 5px}
- .stApp .cm-plan-item p{font-size:12px}
- .stApp .cm-plan-help{margin-top:10px;margin-left:36px}
- .stApp .cm-plan-earned{gap:3px}
- .stApp .cm-plan-medal{width:24px;height:24px;line-height:18px}
-}
+.stApp .cm-plan-postponed,.stApp .cm-plan-medal-pending{display:block;font-size:11px;line-height:1.6;color:#61756e;white-space:normal}
+.stApp .cm-plan-postponed{min-height:46px;padding:8px 3px;text-align:center;background:#f0f4f1;border-radius:11px}
+.stApp .cm-plan-help{display:block;min-width:0;margin:0;padding:0;border:0;background:transparent;color:#61756e}
+.stApp .cm-plan-help summary{display:list-item;list-style-position:inside;min-height:24px;padding:3px 0;font-size:11px;line-height:1.6;cursor:pointer;color:#61756e}
+.stApp .cm-plan-help summary:focus-visible{outline:2px solid #86b5a3;outline-offset:2px;border-radius:4px}
+.stApp .cm-plan-help:not([open]) .cm-plan-detail{display:none}
+.stApp .cm-plan-item .cm-plan-detail p{font-size:11px;line-height:1.7;margin:5px 0!important;padding:0;border:0;color:#61756e;overflow-wrap:anywhere}
+@media(min-width:900px){.stApp .cm-plan-list{grid-template-columns:1fr 1fr 1fr;gap:14px}.stApp .cm-plan-list>.cm-plan-item{padding:15px!important}.stApp .cm-plan-item h3{font-size:15px!important}}
+@media(max-width:360px){.stApp .cm-plan-list{gap:9px}.stApp .cm-plan-list>.cm-plan-item{padding:10px!important;gap:8px}.stApp .cm-plan-item h3{font-size:13px!important}.stApp .cm-plan-heading{gap:5px}.stApp .cm-plan-subject{font-size:10px}}
 </style>
 """
 
@@ -2233,18 +2222,19 @@ def cm_plan_launch_links(items, apps):
     app_map={a['id']:a for a in apps if a.get('ready')}
     links={}; pending={}; payload=[]
     for item in items:
-        if item.get('done') or item.get('available_repetitions',0)<=0:continue
+        revision=max(int(item.get('today_completed_count',0)),int(item.get('completed_count',0)))
+        if not revision and item.get('available_repetitions',0)<=0:continue
         app=app_map.get(item['source_app'])
         if not app or not _valid_https_url(app['url']):continue
         key='cm_link_plan_'+item['plan_item_id']; cached=st.session_state.get(key)
-        if cached and cached.get('profile')==profile and cached.get('url')==app['url'] and cached['expiry']>now+timedelta(seconds=70):
+        if cached and cached.get('profile')==profile and cached.get('url')==app['url'] and cached.get('completion_revision')==revision and cached['expiry']>now+timedelta(seconds=70):
             links[item['plan_item_id']]=cached['link'];continue
         code=secrets.token_urlsafe(32);expiry=now+timedelta(seconds=CM_TICKET_SECONDS)
         modes=item.get('mode_options') or ['challenge']; mode='challenge' if 'challenge' in modes else 'learn'
         payload.append({'ticket_hash':hashlib.sha256(code.encode()).hexdigest(),'profile_id':profile,
             'source_app':item['source_app'],'expires_at':expiry.isoformat(), 'plan_item_id':item['plan_item_id'],
             'menu_id':item['menu_id'],'content_version':item['content_version'],'launch_mode':mode})
-        pending[item['plan_item_id']]={'key':key,'profile':profile,'url':app['url'],'expiry':expiry,'link':cm_launch_url(app['url'],code)}
+        pending[item['plan_item_id']]={'key':key,'profile':profile,'url':app['url'],'expiry':expiry,'completion_revision':revision,'link':cm_launch_url(app['url'],code)}
     if payload:
         url,key=cm_service_config()
         cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,payload=payload,prefer='return=minimal')
@@ -2302,7 +2292,9 @@ def cm_load_daily_plan(age, allowed_sources=None):
         pending.append({**i,'key':key});limits[key]=3-(i['repetitions']-i['completed_count'])
     selected=[] if reached else cm_build_daily_plan(pending,remaining,limits,subject_spent)
     allocations={i['plan_item_id']:i['repetitions'] for i in selected}
-    for i in items:i['available_repetitions']=allocations.get(i['plan_item_id'],0)
+    for i in items:
+        i['available_repetitions']=allocations.get(i['plan_item_id'],0)
+        i['today_completed_count']=analysis['today_counts'].get((i['source_app'],i['menu_id'],i['content_version']),0)
     planned=sum(i['duration_ms']*i['available_repetitions'] for i in items)
     payload={'planner_version':CM_PLANNER_VERSION,'plan_schema':2,'balance_sources':balance_sources,'subject_spent_ms':subject_spent,'age':age,'target_ms':target,
         'spent_ms':analysis['spent_ms'],'measured_ms':analysis['measured_ms'],'estimated_ms':analysis['estimated_ms'],
@@ -2340,22 +2332,27 @@ def cm_plan_items_html(items, links=None):
         subject=html.escape(source)+(' · '+html.escape(category) if category else '')
         source=html.escape(source);basis='本人の実測' if item['duration_basis']=='measured' else '仮の目安'
         medals=''.join('<span class="cm-plan-medal cm-plan-medal-'+html.escape(m['grade'])+'" aria-label="'+GRADE_NAMES[m['grade']]+'メダル">'+GRADE_NAMES[m['grade']]+'</span>' for m in item.get('medals',[]))
-        if done:
-            action='<div class="cm-plan-finished" role="status"><span aria-hidden="true">🌸</span><strong>達成済み</strong></div>'
-        elif item.get('available_repetitions',0)<=0:
+        retry=max(count,int(item.get('today_completed_count',0)))>0
+        badge='<span class="cm-plan-finished" role="status">🌸 達成済み</span>' if done else ''
+        if item.get('plan_item_id') in links and (retry or item.get('available_repetitions',0)>0):
+            button_label='再チャレンジ' if retry else 'はじめる'
+            action='<a class="cm-plan-launch'+(' cm-plan-retry' if retry else '')+'" data-source="'+html.escape(item['source_app'])+'" aria-label="'+source+'・'+label+'を'+button_label+'" href="'+html.escape(links[item['plan_item_id']],quote=True)+'" target="_blank" rel="noopener noreferrer">'+button_label+('' if retry else ' <span aria-hidden="true">↗</span>')+'</a>'
+        elif done:
+            action=''
+        elif item.get('available_repetitions',0)<=0 and not retry:
             action='<span class="cm-plan-postponed">きょうは ここまで</span>'
-        elif item.get('plan_item_id') in links:
-            action='<a class="cm-plan-launch" data-source="'+html.escape(item['source_app'])+'" aria-label="'+source+'・'+label+'を'+('つづける' if count else 'はじめる')+'" href="'+html.escape(links[item['plan_item_id']],quote=True)+'" target="_blank" rel="noopener noreferrer">'+('つづける' if count else 'はじめる')+' <span aria-hidden="true">↗</span></a>'
         else:
             action='<span class="cm-plan-postponed">接続を確認して<br>更新してください</span>'
-        progress=f'<p class="cm-plan-progress">{count}／{total}回 完了</p>' if count else f'<p class="cm-plan-progress">{total}回チャレンジ</p>'
+        progress=f'{count}／{total}回 完了' if count else f'{total}回チャレンジ'
         if count and len(item.get('medals',[]))<count and 'challenge' in item.get('mode_options',[]):
             medals+='<span class="cm-plan-medal-pending">メダル反映待ち</span>'
-        parts.append(f'<li class="cm-plan-item'+(' cm-plan-done' if done else '')+'"><div class="cm-plan-top"><div class="cm-plan-order"><span class="cm-plan-number">'+str(n)+
-            f'</span></div><div class="cm-plan-content"><div class="cm-plan-subject">{subject}</div><h3>{label} <span class="cm-plan-times">× {total}回</span></h3>'+
-            f'<p>{reason}</p><p>約{cm_minutes(item["duration_ms"]*max(0,total-count))}分 · {basis}</p>'+progress+
-            '</div><div class="cm-plan-action">'+action+'<div class="cm-plan-earned">'+medals+'</div></div></div>'+
-            '<details class="cm-plan-help"><summary>単元の開き方</summary><p class="cm-plan-path">'+steps+'</p></details></li>')
+        status=badge+('<div class="cm-plan-earned">'+medals+'</div>' if medals else '')
+        parts.append('<li class="cm-plan-item'+(' cm-plan-done' if done else '')+'">'+
+            '<div class="cm-plan-heading"><span class="cm-plan-number">'+str(n)+'</span><span class="cm-plan-subject">'+subject+'</span></div>'+
+            '<h3>'+label+'</h3><div class="cm-plan-info"><span class="cm-plan-time">約'+cm_minutes(item['duration_ms']*max(0,total-count))+'分</span><span class="cm-plan-progress">'+progress+'</span></div>'+
+            ('<div class="cm-plan-status">'+status+'</div>' if status else '')+
+            '<div class="cm-plan-action">'+action+'</div>'+
+            '<details class="cm-plan-help"><summary>くわしく</summary><div class="cm-plan-detail"><p>'+reason+'</p><p>時間：'+basis+'</p><p>開き方：'+steps+'</p></div></details></li>')
     return '<ol class="cm-plan-list">'+''.join(parts)+'</ol>'
 
 
@@ -2492,7 +2489,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'25';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'27';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
