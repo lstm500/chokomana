@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='29', default=None)
+        app_version='30', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -2348,10 +2348,10 @@ def cm_plan_items_html(items, links=None):
         subject=html.escape(source)+(' · '+html.escape(category) if category else '')
         source=html.escape(source);basis='本人の実測' if item['duration_basis']=='measured' else '仮の目安'
         medals=''.join('<span class="cm-plan-medal cm-plan-medal-'+html.escape(m['grade'])+'" aria-label="'+GRADE_NAMES[m['grade']]+'メダル">'+GRADE_NAMES[m['grade']]+'</span>' for m in item.get('medals',[]))
-        retry=max(count,int(item.get('today_completed_count',0)))>0
+        retry=total>0 and count>=total
         badge='<span class="cm-plan-finished" role="status">🌸 達成済み</span>' if done else ''
         if item.get('plan_item_id') in links and (retry or item.get('available_repetitions',0)>0):
-            button_label='再チャレンジ' if retry else 'はじめる'
+            button_label='再チャレンジ' if retry else ('つづける' if count else 'はじめる')
             action='<a class="cm-plan-launch'+(' cm-plan-retry' if retry else '')+'" data-source="'+html.escape(item['source_app'])+'" aria-label="'+source+'・'+label+'を'+button_label+'" href="'+html.escape(links[item['plan_item_id']],quote=True)+'" target="_blank" rel="noopener noreferrer">'+button_label+('' if retry else ' <span aria-hidden="true">↗</span>')+'</a>'
         elif done:
             action=''
@@ -2509,7 +2509,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'29';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'30';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
