@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='27', default=None)
+        app_version='28', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -825,14 +825,14 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .st-key-cm_home_heading [data-testid="stColumn"]{width:100%!important;min-width:0!important}
 
 /* Compact assignment tiles keep essential information visible in two or three columns. */
-.stApp .cm-plan-list{box-sizing:border-box;list-style:none!important;display:grid;grid-template-columns:1fr 1fr;align-items:stretch;gap:12px;width:100%;margin:18px 0!important;padding:0!important}
-.stApp .cm-plan-list>.cm-plan-item{box-sizing:border-box;list-style:none!important;display:flex;flex-direction:column;gap:9px;min-width:0;margin:0!important;padding:13px!important;border:1px solid #d6e1da;border-radius:14px;background:#fff;color:#233c3c}
+.stApp .cm-plan-list{box-sizing:border-box;list-style:none!important;display:grid;grid-template-columns:1fr 1fr;align-items:stretch;gap:9px;width:100%;margin:6px 0!important;padding:0!important}
+.stApp .cm-plan-list>.cm-plan-item{box-sizing:border-box;list-style:none!important;display:flex;flex-direction:column;gap:5px;min-width:0;margin:0!important;padding:10px!important;border:1px solid #d6e1da;border-radius:14px;background:#fff;color:#233c3c}
 .stApp .cm-plan-item *{box-sizing:border-box}
 .stApp .cm-plan-heading{display:flex;align-items:center;gap:7px;min-width:0}
 .stApp .cm-plan-number{display:block;flex:0 0 23px;width:23px;height:23px;line-height:23px;border-radius:50%;background:#e5efe8;color:#225b4e;text-align:center;font-size:12px;font-weight:800}
 .stApp .cm-plan-subject{font-size:11px;line-height:1.5;color:#61756e;overflow-wrap:anywhere;min-width:0}
-.stApp .cm-plan-item h3{font-size:14px!important;line-height:1.55!important;min-height:2.4em;margin:0!important;padding:0!important;color:#233c3c!important;overflow-wrap:anywhere;word-break:normal}
-.stApp .cm-plan-info{display:block;font-size:12px;line-height:1.6;color:#526b60}
+.stApp .cm-plan-item h3{font-size:14px!important;line-height:1.5!important;min-height:0;margin:0!important;padding:0!important;color:#233c3c!important;overflow-wrap:anywhere;word-break:normal}
+.stApp .cm-plan-info{display:flex;flex-wrap:wrap;align-items:center;gap:2px 7px;font-size:12px;line-height:1.5;color:#526b60}
 .stApp .cm-plan-time{display:block}
 .stApp .cm-plan-progress{display:block;font-size:12px;font-weight:700;color:#245a4b}
 .stApp .cm-plan-status{min-height:24px;display:block}
@@ -846,7 +846,7 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .stApp .cm-plan-medal-bronze{background:#d99c6e;color:#60391e;border-color:#ad7044}
 .stApp .cm-plan-medal-white{background:#f8f9fb;color:#4c5b6a;border-color:#b9c2cb}
 .stApp .cm-plan-action{margin-top:auto;min-width:0;padding:0}
-.stApp a.cm-plan-launch,.stApp a.cm-plan-launch:visited{display:flex;align-items:center;justify-content:center;gap:4px;min-height:46px;width:100%;padding:9px 5px;border:1px solid #287466;border-radius:11px;background:#287466;color:#fff!important;-webkit-text-fill-color:#fff!important;text-decoration:none!important;white-space:nowrap;font-size:13px;line-height:1.5;font-weight:700}
+.stApp a.cm-plan-launch,.stApp a.cm-plan-launch:visited{display:flex;align-items:center;justify-content:center;gap:4px;min-height:44px;width:100%;padding:8px 5px;border:1px solid #287466;border-radius:11px;background:#287466;color:#fff!important;-webkit-text-fill-color:#fff!important;text-decoration:none!important;white-space:nowrap;font-size:13px;line-height:1.5;font-weight:700}
 .stApp a.cm-plan-launch:hover{background:#215e53;border-color:#215e53;text-decoration:none!important}
 .stApp a.cm-plan-launch:focus-visible{outline:3px solid #86b5a3;outline-offset:3px}
 .stApp a.cm-plan-launch.cm-plan-retry,.stApp a.cm-plan-launch.cm-plan-retry:visited{background:#fff3d6;border-color:#d8bf79;color:#775916!important;-webkit-text-fill-color:#775916!important;font-size:12px}
@@ -859,8 +859,24 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .stApp .cm-plan-help summary:focus-visible{outline:2px solid #86b5a3;outline-offset:2px;border-radius:4px}
 .stApp .cm-plan-help:not([open]) .cm-plan-detail{display:none}
 .stApp .cm-plan-item .cm-plan-detail p{font-size:11px;line-height:1.7;margin:5px 0!important;padding:0;border:0;color:#61756e;overflow-wrap:anywhere}
-@media(min-width:900px){.stApp .cm-plan-list{grid-template-columns:1fr 1fr 1fr;gap:14px}.stApp .cm-plan-list>.cm-plan-item{padding:15px!important}.stApp .cm-plan-item h3{font-size:15px!important}}
-@media(max-width:360px){.stApp .cm-plan-list{gap:9px}.stApp .cm-plan-list>.cm-plan-item{padding:10px!important;gap:8px}.stApp .cm-plan-item h3{font-size:13px!important}.stApp .cm-plan-heading{gap:5px}.stApp .cm-plan-subject{font-size:10px}}
+@media(min-width:900px){.stApp .cm-plan-list{grid-template-columns:1fr 1fr 1fr;gap:10px}.stApp .cm-plan-list>.cm-plan-item{padding:12px!important}.stApp .cm-plan-item h3{font-size:15px!important}}
+@media(max-width:360px){.stApp .cm-plan-list{gap:9px}.stApp .cm-plan-list>.cm-plan-item{padding:9px!important;gap:5px}.stApp .cm-plan-item h3{font-size:13px!important}.stApp .cm-plan-heading{gap:5px}.stApp .cm-plan-subject{font-size:10px}}
+
+/* The daily heading, refresh action and time summary form a compact toolbar. */
+.stApp .st-key-cm_daily_plan{margin:8px 0 12px!important}
+.stApp .st-key-cm_plan_toolbar [data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:minmax(0,1fr) 72px;align-items:center;gap:8px!important}
+.stApp .st-key-cm_plan_toolbar [data-testid="stColumn"]{width:100%!important;min-width:0!important}
+.stApp .st-key-cm_plan_toolbar h3{font-size:20px!important;line-height:1.4!important;margin:0!important;padding:0!important}
+.stApp .st-key-cm_plan_toolbar [data-testid="stButton"] button{min-height:44px!important;padding:6px 8px!important}
+.stApp .cm-plan-summary{font-size:13px!important;line-height:1.6;margin:0!important;padding:0;font-weight:700;color:#233c3c}
+.stApp .cm-plan-summary span{display:inline-block;margin-left:10px;font-weight:400;color:#526b60}
+.stApp .cm-plan-subsummary{font-size:12px!important;line-height:1.6;margin:3px 0 0!important;color:#71817a}
+
+.stApp .cm-plan-all-details{margin:4px 0 8px}
+.stApp .cm-plan-all-details summary{font-size:12px;min-height:32px;padding:6px 0}
+.stApp .cm-plan-all-details .cm-plan-detail{padding:9px 0;border:0}
+.stApp .cm-plan-all-details .cm-plan-detail strong{font-size:12px;color:#526b60}
+.stApp .cm-plan-all-details .cm-plan-detail p{font-size:12px;line-height:1.6;margin:4px 0!important;color:#61756e;overflow-wrap:anywhere}
 </style>
 """
 
@@ -2321,7 +2337,7 @@ def cm_minutes(ms):
 
 
 def cm_plan_items_html(items, links=None):
-    links=links or {};parts=[]
+    links=links or {};parts=[];detail_parts=[]
     for n,item in enumerate(items,1):
         label=html.escape(str(item.get('label',item['menu_id'])))
         category=str(item.get('category_label',''));reason=html.escape(item['reason'])
@@ -2343,22 +2359,26 @@ def cm_plan_items_html(items, links=None):
             action='<span class="cm-plan-postponed">きょうは ここまで</span>'
         else:
             action='<span class="cm-plan-postponed">接続を確認して<br>更新してください</span>'
-        progress=f'{count}／{total}回 完了' if count else f'{total}回チャレンジ'
+        progress=f'{count}／{total}回' if count else f'全{total}回'
         if count and len(item.get('medals',[]))<count and 'challenge' in item.get('mode_options',[]):
             medals+='<span class="cm-plan-medal-pending">メダル反映待ち</span>'
         status=badge+('<div class="cm-plan-earned">'+medals+'</div>' if medals else '')
         parts.append('<li class="cm-plan-item'+(' cm-plan-done' if done else '')+'">'+
             '<div class="cm-plan-heading"><span class="cm-plan-number">'+str(n)+'</span><span class="cm-plan-subject">'+subject+'</span></div>'+
-            '<h3>'+label+'</h3><div class="cm-plan-info"><span class="cm-plan-time">約'+cm_minutes(item['duration_ms']*max(0,total-count))+'分</span><span class="cm-plan-progress">'+progress+'</span></div>'+
+            '<h3>'+label+'</h3><div class="cm-plan-info"><span class="cm-plan-time">約'+cm_minutes(item['duration_ms']*max(0,total-count))+'分</span><span class="cm-plan-progress" aria-label="'+str(count)+'／'+str(total)+'回 完了">'+progress+'</span></div>'+
             ('<div class="cm-plan-status">'+status+'</div>' if status else '')+
             '<div class="cm-plan-action">'+action+'</div>'+
-            '<details class="cm-plan-help"><summary>くわしく</summary><div class="cm-plan-detail"><p>'+reason+'</p><p>時間：'+basis+'</p><p>開き方：'+steps+'</p></div></details></li>')
-    return '<ol class="cm-plan-list">'+''.join(parts)+'</ol>'
+            '</li>')
+        detail_parts.append('<div class="cm-plan-detail"><strong>'+str(n)+'. '+source+' · '+label+'</strong><p>'+reason+' · '+basis+'</p><p>開き方：'+steps+'</p></div>')
+    return '<ol class="cm-plan-list">'+''.join(parts)+'</ol>'+('<details class="cm-plan-help cm-plan-all-details"><summary>課題の詳細・開き方</summary>'+''.join(detail_parts)+'</details>' if parts else '')
 
 
 def render_daily_plan(apps):
     with st.container(border=True,key='cm_daily_plan'):
-        st.markdown('### きょう やること')
+        with st.container(key='cm_plan_toolbar'):
+            title_col,refresh_col=st.columns([3,1],gap='small')
+            with title_col:st.markdown('### きょう やること')
+            with refresh_col:refresh=cm_button('更新',key='cm_plan_refresh',use_container_width=True)
         try:
             age = cm_plan_settings()
         except RuntimeError:
@@ -2368,7 +2388,6 @@ def render_daily_plan(apps):
             st.info('年齢を設定すると、今日やる学習を自動で選びます。')
             render_plan_age()
             return
-        refresh = cm_button('学習記録を更新',key='cm_plan_refresh',use_container_width=True)
         cached = st.session_state.get('cm_plan_snapshot')
         cache_key = (st.session_state['cm_profile'],now_jst().date().isoformat(),age,CM_PLANNER_VERSION)
         if refresh or not cached or cached['key']!=cache_key or time.time()-cached['at']>60:
@@ -2378,13 +2397,14 @@ def render_daily_plan(apps):
                 cached = {'key':cache_key,'at':time.time(),'payload':payload}
                 st.session_state['cm_plan_snapshot']=cached
             except (RuntimeError,ValueError,KeyError,TypeError):
-                cm_error('学習記録を読み込めませんでした。「学習記録を更新」で再試行してください。')
+                cm_error('学習記録を読み込めませんでした。「更新」で再試行してください。')
                 st.caption('読み込みに失敗した記録を、未学習として扱うことはありません。')
                 return
         p = cached['payload']
-        st.markdown(f'**{age}歳 · 1日{age*10}分**　／　学習済み 約{cm_minutes(p["spent_ms"])}分')
+        summary=f'<p class="cm-plan-summary">{age}歳 · 目安{age*10}分 <span>学習済み {cm_minutes(p["spent_ms"])}分</span></p>'
         if not p['reached']:
-            st.caption(f'このあとの予定：約{cm_minutes(p["planned_ms"])}分（残りの目安 {cm_minutes(p["remaining_ms"])}分）')
+            summary+=f'<p class="cm-plan-subsummary">このあと約{cm_minutes(p["planned_ms"])}分 · 残りの目安{cm_minutes(p["remaining_ms"])}分</p>'
+        st.markdown(summary,unsafe_allow_html=True)
         if p['missing_time'] or p['partial_time']:
             st.caption('未計測の時間があります。完了した学習は単元の目安時間で補っており、残り時間は暫定です。')
         if p['reached']:
@@ -2489,7 +2509,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'27';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'28';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
