@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='24', default=None)
+        app_version='25', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -806,13 +806,6 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .stApp .st-key-cm_account_form [data-testid="stAlert"] [data-testid="stMarkdownContainer"],
 .stApp .st-key-cm_account_form [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p{color:#842c20!important;-webkit-text-fill-color:#842c20!important}
 /* Daily assignments share the existing account colors, with clear row spacing. */
-.cm-plan-list{list-style:none;margin:16px 0;padding:0;display:grid;gap:14px}
-.cm-plan-item{display:grid;grid-template-columns:30px minmax(0,1fr);gap:10px;align-items:start;padding:14px 12px;border:1px solid #d6e1da;border-radius:14px;background:#ffffff;color:#233c3c}
-.cm-plan-number{display:block;align-self:start;width:28px;height:28px;line-height:28px;border-radius:50%;background:#e5efe8;color:#225b4e;text-align:center;font-weight:800}
-.cm-plan-item h3{font-size:16px!important;line-height:1.6!important;margin:4px 0 8px!important;padding:0!important;overflow-wrap:anywhere;color:#233c3c!important}
-.cm-plan-item p{font-size:13px;line-height:1.7;margin:4px 0;color:#526b60;overflow-wrap:anywhere}
-.cm-plan-subject{font-size:12px;color:#526b60;line-height:1.6}
-.cm-plan-path{padding-top:6px;border-top:1px solid #edf1ee}
 .st-key-cm_daily_plan{margin:16px 0 20px!important}
 .stApp [data-testid="stNumberInput"] input,.stApp [data-testid="stNumberInput"] [data-baseweb="input"],
 .stApp [data-testid="stNumberInput"] [data-baseweb="base-input"]{background:#ffffff!important;color:#233c3c!important;-webkit-text-fill-color:#233c3c!important;color-scheme:light}
@@ -831,28 +824,54 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .st-key-cm_home_heading [data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:minmax(0,1fr) 88px;gap:10px!important;align-items:center}
 .st-key-cm_home_heading [data-testid="stColumn"]{width:100%!important;min-width:0!important}
 
-.cm-plan-item{grid-template-columns:28px minmax(0,1fr) 140px;gap:10px 14px;align-items:center}
-.cm-plan-content{min-width:0}.cm-plan-number{align-self:start}
-.cm-plan-item .cm-plan-path{grid-column:2 / -1;width:100%;margin:0;padding-top:10px}
-.cm-plan-action{align-self:center;text-align:center;min-width:0}
-.cm-plan-launch{display:block;padding:12px 8px;border-radius:12px;background:#287466;color:white!important;text-decoration:none;font-size:14px;line-height:1.6;min-height:48px;font-weight:700}
-.cm-plan-launch:hover{background:#215e53}.cm-plan-launch:focus-visible{outline:3px solid #86b5a3;outline-offset:3px}
-.cm-plan-finished{color:#245a4b;display:block;text-align:center}.cm-plan-finished>span{display:block;margin-bottom:6px;font-size:30px;line-height:1.2}.cm-plan-finished strong{font-size:14px}
-.cm-plan-progress{font-weight:700;color:#245a4b!important}.cm-plan-earned{display:block;margin-top:8px}.cm-plan-earned:empty{display:none}
-.cm-plan-medal{width:30px;height:30px;display:inline-block;line-height:24px;text-align:center;vertical-align:middle;margin-right:5px;border-radius:50%;font-size:12px;font-weight:800;border:3px double}
-.cm-plan-medal-gold{background:#f5d361;color:#69470a;border-color:#bd8c26}.cm-plan-medal-silver{background:#d8e0e8;color:#3d5266;border-color:#9aa9b8}.cm-plan-medal-bronze{background:#d99c6e;color:#60391e;border-color:#ad7044}.cm-plan-medal-white{background:#f8f9fb;color:#4c5b6a;border-color:#b9c2cb}
-.cm-plan-postponed,.cm-plan-medal-pending{font-size:12px;line-height:1.6;color:#61756e}.cm-plan-done{background:#f2f8f4;border-color:#b8d4c4}
-@media(max-width:640px){.cm-plan-item{grid-template-columns:24px minmax(0,1fr) 92px;gap:9px;padding:13px 10px}.cm-plan-item h3{font-size:15px!important}.cm-plan-launch{font-size:13px;padding:10px 5px}.cm-plan-item .cm-plan-path{font-size:11px}}
-
-/* Fixed action column keeps the launch/status in the same place at every width. */
-.cm-plan-item{display:block;padding:14px 12px}
-.cm-plan-top{display:table;table-layout:fixed;width:100%}
-.cm-plan-order{display:table-cell;width:42px;vertical-align:top;padding-right:14px}
-.cm-plan-content{display:table-cell;vertical-align:top;overflow-wrap:anywhere}
-.cm-plan-action{display:table-cell;width:140px;vertical-align:middle;padding-left:14px}
-.cm-plan-number{display:inline-block;vertical-align:top}
-.cm-plan-item .cm-plan-path{width:auto;margin:10px 0 0 42px;padding-top:10px}
-@media(max-width:640px){.cm-plan-order{width:33px;padding-right:9px}.cm-plan-action{width:101px;padding-left:9px}.cm-plan-item .cm-plan-path{margin-left:33px}.cm-plan-medal{width:24px;height:24px;line-height:18px;margin-right:2px;font-size:11px}}
+/* Assignment cards: scoped resets prevent Markdown list/link styles leaking in. */
+.stApp .cm-plan-list{list-style:none!important;margin:20px 0!important;padding:0!important;display:grid;gap:16px}
+.stApp .cm-plan-list>.cm-plan-item{box-sizing:border-box;list-style:none!important;display:block;margin:0!important;padding:18px!important;min-width:0;border:1px solid #d6e1da;border-radius:16px;background:#fff;color:#233c3c}
+.stApp .cm-plan-item *{box-sizing:border-box}
+.stApp .cm-plan-top{display:table;table-layout:fixed;width:100%;min-width:0}
+.stApp .cm-plan-order{display:table-cell;vertical-align:top;width:42px;padding:0 14px 0 0}
+.stApp .cm-plan-number{display:block;width:28px;height:28px;line-height:28px;margin:0;border-radius:50%;background:#e5efe8;color:#225b4e;text-align:center;font-size:14px;font-weight:800}
+.stApp .cm-plan-content{display:table-cell;vertical-align:top;min-width:0;padding:0;overflow-wrap:anywhere}
+.stApp .cm-plan-subject{font-size:12px;line-height:1.5;color:#61756e;margin:0 0 5px}
+.stApp .cm-plan-item h3{font-size:16px!important;line-height:1.6!important;margin:0 0 10px!important;padding:0!important;overflow-wrap:anywhere;color:#233c3c!important}
+.stApp .cm-plan-times{display:inline-block;white-space:nowrap}
+.stApp .cm-plan-item p{font-size:13px;line-height:1.65;margin:4px 0!important;color:#526b60;overflow-wrap:anywhere}
+.stApp .cm-plan-item p.cm-plan-progress{margin-top:10px!important;font-weight:700;color:#245a4b}
+.stApp .cm-plan-action{display:table-cell;vertical-align:middle;width:138px;padding:0 0 0 14px;text-align:center}
+.stApp a.cm-plan-launch,.stApp a.cm-plan-launch:visited{display:flex;align-items:center;justify-content:center;gap:4px;width:100%;min-height:48px;padding:10px 8px;border:1px solid #287466;border-radius:12px;background:#287466;color:#fff!important;-webkit-text-fill-color:#fff!important;text-decoration:none!important;font-size:14px;line-height:1.5;font-weight:700;white-space:nowrap}
+.stApp a.cm-plan-launch:hover{background:#215e53;border-color:#215e53;text-decoration:none!important}
+.stApp a.cm-plan-launch:focus-visible{outline:3px solid #86b5a3;outline-offset:3px}
+.stApp .cm-plan-finished{color:#245a4b;display:block;text-align:center}
+.stApp .cm-plan-finished>span{display:block;margin-bottom:5px;font-size:28px;line-height:1.2}
+.stApp .cm-plan-finished strong{font-size:13px}
+.stApp .cm-plan-earned{display:flex;flex-wrap:wrap;justify-content:center;gap:4px;margin-top:8px}
+.stApp .cm-plan-earned:empty{display:none}
+.stApp .cm-plan-medal{width:26px;height:26px;display:inline-block;line-height:20px;text-align:center;vertical-align:middle;margin:0;border-radius:50%;font-size:11px;font-weight:800;border:3px double}
+.stApp .cm-plan-medal-gold{background:#f5d361;color:#69470a;border-color:#bd8c26}
+.stApp .cm-plan-medal-silver{background:#d8e0e8;color:#3d5266;border-color:#9aa9b8}
+.stApp .cm-plan-medal-bronze{background:#d99c6e;color:#60391e;border-color:#ad7044}
+.stApp .cm-plan-medal-white{background:#f8f9fb;color:#4c5b6a;border-color:#b9c2cb}
+.stApp .cm-plan-postponed,.stApp .cm-plan-medal-pending{font-size:12px;line-height:1.6;color:#61756e;white-space:normal}
+.stApp .cm-plan-list>.cm-plan-done{background:#f2f8f4;border-color:#b8d4c4}
+.stApp .cm-plan-help{display:block;min-width:0;margin:12px 0 0 42px;padding:0;border:0;background:transparent;color:#61756e}
+.stApp .cm-plan-help:not([open]) .cm-plan-path{display:none}
+.stApp .cm-plan-help summary{display:list-item;list-style-position:inside;cursor:pointer;font-size:11px;line-height:1.6;min-height:24px;padding:3px 0;color:#61756e}
+.stApp .cm-plan-help summary:focus-visible{outline:2px solid #86b5a3;outline-offset:3px;border-radius:4px}
+.stApp .cm-plan-item .cm-plan-path{margin:6px 0 0!important;padding:0;border:0;font-size:12px;line-height:1.7;color:#61756e}
+@media(max-width:640px){
+ .stApp .cm-plan-list{gap:14px}
+ .stApp .cm-plan-list>.cm-plan-item{padding:16px 14px!important}
+ .stApp .cm-plan-order{width:36px;padding-right:10px}
+ .stApp .cm-plan-action{width:98px;padding-left:10px}
+ .stApp .cm-plan-number{width:26px;height:26px;line-height:26px;font-size:13px}
+ .stApp .cm-plan-item h3{font-size:15px!important;margin-bottom:8px!important}
+ .stApp .cm-plan-subject{font-size:11px}
+ .stApp a.cm-plan-launch,.stApp a.cm-plan-launch:visited{min-height:46px;font-size:13px;padding:9px 5px}
+ .stApp .cm-plan-item p{font-size:12px}
+ .stApp .cm-plan-help{margin-top:10px;margin-left:36px}
+ .stApp .cm-plan-earned{gap:3px}
+ .stApp .cm-plan-medal{width:24px;height:24px;line-height:18px}
+}
 </style>
 """
 
@@ -2313,27 +2332,30 @@ def cm_plan_items_html(items, links=None):
     links=links or {};parts=[]
     for n,item in enumerate(items,1):
         label=html.escape(str(item.get('label',item['menu_id'])))
-        category=html.escape(str(item.get('category_label','')));reason=html.escape(item['reason'])
+        category=str(item.get('category_label',''));reason=html.escape(item['reason'])
         steps=' → '.join(html.escape(str(x)) for x in item['selection_instructions'])
         count=int(item.get('completed_count',0));total=int(item['repetitions']);done=item.get('done',False)
-        source=html.escape(SUBJECT_NAMES[item['source_app']]);basis='本人の実測' if item['duration_basis']=='measured' else '仮の目安'
+        source=SUBJECT_NAMES[item['source_app']]
+        if category.startswith(source):category=category[len(source):].lstrip(' ·・')
+        subject=html.escape(source)+(' · '+html.escape(category) if category else '')
+        source=html.escape(source);basis='本人の実測' if item['duration_basis']=='measured' else '仮の目安'
         medals=''.join('<span class="cm-plan-medal cm-plan-medal-'+html.escape(m['grade'])+'" aria-label="'+GRADE_NAMES[m['grade']]+'メダル">'+GRADE_NAMES[m['grade']]+'</span>' for m in item.get('medals',[]))
         if done:
             action='<div class="cm-plan-finished" role="status"><span aria-hidden="true">🌸</span><strong>達成済み</strong></div>'
         elif item.get('available_repetitions',0)<=0:
             action='<span class="cm-plan-postponed">きょうは ここまで</span>'
         elif item.get('plan_item_id') in links:
-            action='<a class="cm-plan-launch" data-source="'+html.escape(item['source_app'])+'" href="'+html.escape(links[item['plan_item_id']],quote=True)+'" target="_blank" rel="noopener noreferrer">'+('つづきを<br>はじめる' if count else 'この単元を<br>はじめる')+' ↗</a>'
+            action='<a class="cm-plan-launch" data-source="'+html.escape(item['source_app'])+'" aria-label="'+source+'・'+label+'を'+('つづける' if count else 'はじめる')+'" href="'+html.escape(links[item['plan_item_id']],quote=True)+'" target="_blank" rel="noopener noreferrer">'+('つづける' if count else 'はじめる')+' <span aria-hidden="true">↗</span></a>'
         else:
             action='<span class="cm-plan-postponed">接続を確認して<br>更新してください</span>'
         progress=f'<p class="cm-plan-progress">{count}／{total}回 完了</p>' if count else f'<p class="cm-plan-progress">{total}回チャレンジ</p>'
         if count and len(item.get('medals',[]))<count and 'challenge' in item.get('mode_options',[]):
             medals+='<span class="cm-plan-medal-pending">メダル反映待ち</span>'
         parts.append(f'<li class="cm-plan-item'+(' cm-plan-done' if done else '')+'"><div class="cm-plan-top"><div class="cm-plan-order"><span class="cm-plan-number">'+str(n)+
-            f'</span></div><div class="cm-plan-content"><div class="cm-plan-subject">{source} · {category}</div><h3>{label} × {total}回</h3>'+
+            f'</span></div><div class="cm-plan-content"><div class="cm-plan-subject">{subject}</div><h3>{label} <span class="cm-plan-times">× {total}回</span></h3>'+
             f'<p>{reason}</p><p>約{cm_minutes(item["duration_ms"]*max(0,total-count))}分 · {basis}</p>'+progress+
             '</div><div class="cm-plan-action">'+action+'<div class="cm-plan-earned">'+medals+'</div></div></div>'+
-            '<p class="cm-plan-path">えらぶ順：'+steps+'</p></li>')
+            '<details class="cm-plan-help"><summary>単元の開き方</summary><p class="cm-plan-path">'+steps+'</p></details></li>')
     return '<ol class="cm-plan-list">'+''.join(parts)+'</ol>'
 
 
@@ -2470,7 +2492,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'24';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'25';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
