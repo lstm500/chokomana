@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='33', default=None)
+        app_version='34', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -534,7 +534,7 @@ function stampIndex(beats,elapsed){let low=0,high=beats.length;while(low<high){c
 function makeTrack(ac){
  const sr=24000,leadFrames=Math.round(.06*sr),voiceClips=items.map(x=>pcm(clips[key(x.reading)])),offsets=[];
  let cursor=leadFrames;
- voiceClips.forEach((clip,i)=>{offsets.push(cursor);cursor+=clip.length;if(i+1<voiceClips.length)cursor-=Math.min(Math.round(.045*sr),Math.floor(clip.length/4),Math.floor(voiceClips[i+1].length/4))});
+ voiceClips.forEach((clip,i)=>{offsets.push(cursor);cursor+=clip.length;if(i+1<voiceClips.length)cursor-=Math.min(Math.round(.075*sr),Math.floor(clip.length/3),Math.floor(voiceClips[i+1].length/3))});
  const finale=(cursor+Math.round(.025*sr))/sr,beats=offsets.map(x=>x/sr);
  const buffer=ac.createBuffer(1,Math.ceil((finale+.72)*sr),sr),out=buffer.getChannelData(0);
  // Restore the original warm robot glide: 196Hz to 784Hz over the whole collection.
@@ -553,8 +553,8 @@ function makeTrack(ac){
   const start=offsets[i],at=beats[i],clip=voiceClips[i],span=(i+1<offsets.length?offsets[i+1]-start:clip.length)/sr;
   // Voice and instruments are mixed into the same PCM samples, not separate clocks.
   // Equal-power joins avoid the dip of a linear fade at each word boundary.
-  const fadeIn=i?Math.min(Math.round(.045*sr),Math.floor(clip.length/4),Math.floor(voiceClips[i-1].length/4)):Math.min(Math.round(.004*sr),Math.floor(clip.length/4));
-  const fadeOut=i+1<voiceClips.length?Math.min(Math.round(.045*sr),Math.floor(clip.length/4),Math.floor(voiceClips[i+1].length/4)):Math.min(Math.round(.004*sr),Math.floor(clip.length/4));
+  const fadeIn=i?Math.min(Math.round(.075*sr),Math.floor(clip.length/3),Math.floor(voiceClips[i-1].length/3)):Math.min(Math.round(.004*sr),Math.floor(clip.length/3));
+  const fadeOut=i+1<voiceClips.length?Math.min(Math.round(.075*sr),Math.floor(clip.length/3),Math.floor(voiceClips[i+1].length/3)):Math.min(Math.round(.004*sr),Math.floor(clip.length/3));
   for(let j=0;j<clip.length&&start+j<out.length;j++){const blend=Math.min(1,fadeIn?j/fadeIn:1,fadeOut?(clip.length-1-j)/fadeOut:1),edge=Math.sin(blend*Math.PI/2);out[start+j]+=clip[j]*.80*edge}
   const hz=196*Math.pow(4,i/Math.max(1,items.length-1)),previous=i?196*Math.pow(4,(i-1)/Math.max(1,items.length-1))*.94:null;
   melody(at,hz,previous,span+.08);
@@ -2527,7 +2527,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'33';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'34';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
