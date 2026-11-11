@@ -232,7 +232,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='28', default=None)
+        app_version='29', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -846,8 +846,8 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .stApp .cm-plan-medal-bronze{background:#d99c6e;color:#60391e;border-color:#ad7044}
 .stApp .cm-plan-medal-white{background:#f8f9fb;color:#4c5b6a;border-color:#b9c2cb}
 .stApp .cm-plan-action{margin-top:auto;min-width:0;padding:0}
-.stApp a.cm-plan-launch,.stApp a.cm-plan-launch:visited{display:flex;align-items:center;justify-content:center;gap:4px;min-height:44px;width:100%;padding:8px 5px;border:1px solid #287466;border-radius:11px;background:#287466;color:#fff!important;-webkit-text-fill-color:#fff!important;text-decoration:none!important;white-space:nowrap;font-size:13px;line-height:1.5;font-weight:700}
-.stApp a.cm-plan-launch:hover{background:#215e53;border-color:#215e53;text-decoration:none!important}
+.stApp a.cm-plan-launch,.stApp a.cm-plan-launch:visited{display:flex;align-items:center;justify-content:center;gap:4px;min-height:44px;width:100%;padding:8px 5px;border:1px solid #bacbc1;border-radius:11px;background:#e5efe8;color:#225b4e!important;-webkit-text-fill-color:#225b4e!important;text-decoration:none!important;white-space:nowrap;font-size:13px;line-height:1.5;font-weight:700}
+.stApp a.cm-plan-launch:hover{background:#dce9e1;border-color:#9bb6a8;text-decoration:none!important}
 .stApp a.cm-plan-launch:focus-visible{outline:3px solid #86b5a3;outline-offset:3px}
 .stApp a.cm-plan-launch.cm-plan-retry,.stApp a.cm-plan-launch.cm-plan-retry:visited{background:#fff3d6;border-color:#d8bf79;color:#775916!important;-webkit-text-fill-color:#775916!important;font-size:12px}
 .stApp a.cm-plan-launch.cm-plan-retry:hover{background:#f8e7bc;border-color:#c5a55a}
@@ -2509,7 +2509,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'28';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'29';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
