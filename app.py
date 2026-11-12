@@ -17,6 +17,7 @@ Optional Streamlit Secrets:
   KOTOBA_APP_URL = "https://...streamlit.app"
   SOROBAN_APP_URL = "https://...streamlit.app"
   GEOMETRY_APP_URL = "https://...streamlit.app"
+  ENGLISH_APP_URL = "https://...streamlit.app"
 
 Security: username/password accounts and sessions are verified server-side; launch tickets are one-time,
 service/secret keys are kept only in the Python server process.
@@ -37,6 +38,7 @@ import streamlit.components.v1 as components
 
 
 TOKYO = ZoneInfo("Asia/Tokyo")
+DEFAULT_ENGLISH_APP_URL = 'https://chokomanaeigojunior-wuyqysc66uknyiyvpdvaw2.streamlit.app/'
 DEFAULT_SUPABASE_URL = "https://keewulninyoeylgflshb.supabase.co"
 TABLE_NAME = "chokomana_stamps"
 BATCH_SIZE = 400
@@ -47,11 +49,12 @@ FIELDS = (
     "total_count", "grade", "finished_at", "study_date",
 )
 GRADE_NAMES = {"gold": "金", "silver": "銀", "bronze": "銅", "white": "白"}
-SUBJECT_NAMES = {"kotoba": "国語", "soroban": "そろばん", "geometry": "図形"}
+SUBJECT_NAMES = {"kotoba": "国語", "soroban": "そろばん", "geometry": "図形", "english": "英語"}
 APP_DEFINITIONS = (
     {"id": "kotoba", "title": "こくご・ことば", "tag": "ことばを広げる", "symbol": "言", "secret": "KOTOBA_APP_URL", "icon": "あ"},
     {"id": "soroban", "title": "そろばん", "tag": "計算にチャレンジ", "symbol": "算", "secret": "SOROBAN_APP_URL", "icon": "123"},
     {"id": "geometry", "title": "ずけいのアトリエ", "tag": "図形で考える", "symbol": "図", "secret": "GEOMETRY_APP_URL", "icon": "△"},
+    {"id": "english", "title": "えいご・ジュニア", "tag": "おとと ことばで あそぼう", "symbol": "英", "secret": "ENGLISH_APP_URL", "icon": "ABC"},
 )
 
 
@@ -232,7 +235,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='34', default=None)
+        app_version='36', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -281,7 +284,8 @@ def _setting(name: str, default: str = "") -> str:
         val = None
     if val is None:
         val = os.environ.get(name, default)
-    return str(val or "").strip()
+    value = str(val or "").strip()
+    return value or (DEFAULT_ENGLISH_APP_URL if name == "ENGLISH_APP_URL" else "")
 
 
 def _valid_https_url(value: str) -> bool:
@@ -700,9 +704,10 @@ header[data-testid="stHeader"]{display:none!important}
 [class*="st-key-nav_"] button{min-height:44px!important;padding:6px 4px!important}
 [class*="st-key-nav_"] button p{font-size:13px!important;white-space:nowrap}
 .cm-home-question{font-size:23px!important;font-weight:800;line-height:1.4!important;padding:0 0 18px!important;margin:8px 0 0!important}
-.cm-subject-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding-bottom:24px}
+.cm-subject-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;padding-bottom:24px}
 .cm-subject{--subject:#b14f43;--wash:#fff0e9;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:23px 10px 16px;border:2px solid #efcabc;border-radius:22px;background:var(--wash);color:var(--subject)!important;text-decoration:none!important;min-width:0;box-shadow:0 4px 0 #efcabc;transition:transform .12s}
 .cm-subject-soroban{--subject:#28689b;--wash:#edf5ff;border-color:#c0d7ee;box-shadow:0 4px 0 #c0d7ee}
+.cm-subject-english{--subject:#76519b;--wash:#f3edf9;border-color:#d9c6e9;box-shadow:0 4px 0 #d9c6e9}
 .cm-subject-geometry{--subject:#886319;--wash:#fff7dd;border-color:#e8d89f;box-shadow:0 4px 0 #e8d89f}
 .cm-subject-icon{display:block;width:68px;height:68px;flex-shrink:0}
 .cm-subject-icon svg{display:block;width:100%;height:100%}
@@ -721,7 +726,7 @@ a.cm-subject:focus-visible{outline:3px solid #287466;outline-offset:4px}
 .cm-brand p{font-size:10px}
 .cm-brand{margin-bottom:0;padding-bottom:16px}
 .cm-home-question{font-size:21px!important;margin:8px 0 0!important;padding-bottom:18px!important}
-.cm-subject-grid{gap:9px;padding-bottom:24px}
+.cm-subject-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding-bottom:24px}
 .cm-subject{border-radius:17px;padding:15px 4px 11px;gap:10px}
 .cm-subject-icon{width:48px;height:48px}
 .cm-subject-label{font-size:18px}
@@ -1021,12 +1026,13 @@ def cm_launch_connection_hints(apps):
 
 def home_cards_html(apps: list[dict]) -> str:
     """One native anchor per subject, kept side-by-side at phone widths."""
-    labels = {"kotoba": "こくご", "soroban": "そろばん", "geometry": "ずけい"}
+    labels = {"kotoba": "こくご", "soroban": "そろばん", "geometry": "ずけい", "english": "えいご"}
     icons = {
         "kotoba": '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 13c10-3 17-1 24 4 7-5 14-7 24-4v37c-9-3-16-1-24 4-8-5-15-7-24-4Z" fill="currentColor" opacity=".16"/><path d="M8 13c10-3 17-1 24 4 7-5 14-7 24-4v37c-9-3-16-1-24 4-8-5-15-7-24-4Zm24 4v37M15 25l10 3m-10 7 10 3m14-10 10-3m-10 13 10-3" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
         "soroban": '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="10" width="52" height="44" rx="5" fill="currentColor" opacity=".12"/><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 10h52v44H6ZM7 28h50M19 14v36m13-36v36m13-36v36"/></g><g fill="currentColor"><path d="m12 21 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5ZM12 35l7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Z"/></g></svg>',
         "geometry": '<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="21" cy="23" r="14" fill="currentColor" opacity=".18"/><circle cx="21" cy="23" r="14" stroke="currentColor" stroke-width="3" fill="none"/><path d="m38 14 20 34H18Z" fill="currentColor" opacity=".3"/><path d="m38 14 20 34H18Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M8 40h19v17H8Z" fill="currentColor" opacity=".65"/></svg>',
     }
+    icons['english'] = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="5" y="10" width="54" height="44" rx="12" fill="currentColor" opacity=".14"/><path d="M13 45 23 20l10 25M17 36h12M39 21v24h7c10 0 10-12 0-12h-7m0-12h6c9 0 9 12 0 12" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
     try:
         links = cm_prepare_launch_links(apps)
     except (RuntimeError, ValueError):
@@ -1036,7 +1042,7 @@ def home_cards_html(apps: list[dict]) -> str:
     for app in apps:
         app_id = app["id"]
         label = labels.get(app_id, app["title"])
-        icon_color = {"kotoba": "#b14f43", "soroban": "#28689b", "geometry": "#886319"}.get(app_id, "#287466")
+        icon_color = {"kotoba": "#b14f43", "soroban": "#28689b", "geometry": "#886319", "english": "#76519b"}.get(app_id, "#287466")
         icon = icons.get(app_id, "").replace("currentColor", icon_color)
         body = (f'<span class="cm-subject-icon">{icon}</span>'
                 f'<span class="cm-subject-label">{html.escape(label)}</span>')
@@ -1258,7 +1264,7 @@ import streamlit.components.v1 as components
 
 CM_PUBLIC_URL = 'https://keewulninyoeylgflshb.supabase.co'
 CM_PUBLIC_KEY = 'sb_publishable_iud9MpcZSxZHzSczRTIDqg_4BNZWQ8g'
-CM_SOURCE_KEYS = ('kotoba','soroban','geometry')
+CM_SOURCE_KEYS = ('kotoba','soroban','geometry','english')
 CM_TICKET_SECONDS = 900
 
 
@@ -1793,7 +1799,7 @@ def cm_launch_url(base,code):
     return urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode(query),''))
 
 # Adaptive planning uses observed responses, never medal colors or a language model's guesses.
-CM_PLANNER_VERSION = 'adaptive-2-balanced'
+CM_PLANNER_VERSION = 'adaptive-3-english'
 
 
 def cm_plan_rows(table, params):
@@ -1902,12 +1908,16 @@ def cm_plan_union(spans):
 def cm_plan_menus(catalog, age):
     import math
     latest = {}
+    english_rows = [r for r in catalog if r.get('source_app') == 'english' and r.get('entry_type') == 'menu']
+    english_version = max(english_rows, key=lambda r:(r.get('published_at',''),r.get('content_version',''))).get('content_version') if english_rows else None
     for row in sorted(catalog, key=lambda r: (r.get('published_at', ''), r.get('content_version', ''))):
         if row.get('entry_type') != 'menu' or row.get('source_app') not in SUBJECT_NAMES:
             continue
         latest[(row['source_app'], row['entry_id'])] = row
     menus = []
     for row in latest.values():
+        if row['source_app'] == 'english' and row.get('content_version') != english_version:
+            continue
         p = row.get('payload') or {}
         if p.get('is_active') is False:
             continue
@@ -2022,7 +2032,8 @@ def cm_plan_analyze(events, menus, profile, today):
         stats[key] = {'mastered': mastered, 'weak': weak, 'accuracy': rate,
             'posterior': (1+sum(v['correct'] for v in clean))/(2+len(clean)),
             'due': last_day + timedelta(days=1 if weak else interval), 'last_day': last_day,
-            'attempts': len(aids), 'count': len(clean)}
+            'attempts': len(aids), 'count': len(clean),
+            'practice_ready': key[0]=='english' and bool(last_set) and all(v['correct'] for v in last_set)}
     for aid, end in ends.items():
         start = starts.get(aid)
         if not start or end['payload'].get('status') != 'completed' or aid in unknown or aid in reloaded or not spans[aid]:
@@ -2086,6 +2097,8 @@ def cm_plan_candidates(menus, analysis, today):
     def key(m): return (m['source_app'],m['menu_id'],m['content_version'])
     known = {m['menu_id']:stats.get(key(m),{}) for m in menus}
     for m in menus:
+        if m['source_app']=='english':
+            continue
         if 'reading_aloud' in m.get('mode_options', []):
             continue  # Read-aloud alone is not evidence of mastery.
         groups[(m['source_app'],m.get('progression_group_id') or m['menu_id'])].append(m)
@@ -2128,7 +2141,43 @@ def cm_plan_candidates(menus, analysis, today):
                 continue
             candidates.append({**m, 'duration_ms':int(duration), 'duration_basis':'measured' if measured else 'provisional',
                 'reason':reason, 'score':score, 'key':key(m), 'accuracy':ss.get('accuracy')})
+    candidates.extend(cm_english_candidates(menus, analysis, today))
     return candidates
+
+
+def cm_english_candidates(menus, analysis, today):
+    english = [m for m in menus if m['source_app']=='english']
+    key = lambda m: ('english',m['menu_id'],m['content_version'])
+    completed = analysis['completed']; stats = analysis['stats']
+    alphabet = sorted([m for m in english if m.get('learning_stage')=='alphabet'],key=lambda m:m['menu_id'])
+    next_alphabet = next((m['menu_id'] for m in alphabet if not completed.get(key(m),0)),None)
+    by_id = {m['menu_id']:m for m in english}; result = []
+    for m in english:
+        k=key(m); ss=stats.get(k,{})
+        stage=m.get('learning_stage')
+        if stage=='alphabet' and m['menu_id']!=next_alphabet:
+            continue
+        if stage=='quiz':
+            required=m.get('requires_menu_ids') or []
+            if not required or not all(mid in by_id and completed.get(key(by_id[mid]),0)>0
+                    and stats.get(key(by_id[mid]),{}).get('practice_ready') for mid in required):
+                continue
+            if ss.get('mastered') and ss.get('due',today)>today:
+                continue
+        if stage!='quiz':
+            reason,score='おとと ことばの練習',70 if not completed.get(k,0) else 60
+        elif ss.get('weak'):
+            reason,score='もういちど練習',110+20*(1-ss['posterior'])
+        elif ss and ss.get('due',today)<=today:
+            reason,score='思い出す復習',105+min(15,(today-ss['due']).days)
+        else:
+            reason,score='理解をたしかめる',75
+        estimate=analysis['durations'].get(k)
+        measured=bool(estimate and estimate['question_count']==m.get('question_count_default',m.get('planned_question_count')))
+        duration=estimate['ms'] if measured else m['estimated_duration_ms']
+        result.append({**m,'duration_ms':int(duration),'duration_basis':'measured' if measured else 'provisional',
+            'reason':reason,'score':score,'key':k,'accuracy':ss.get('accuracy') if stage=='quiz' else None})
+    return result
 
 
 def cm_build_daily_plan(candidates, remaining_ms, today_counts, subject_spent_ms=None):
@@ -2442,7 +2491,7 @@ def render_daily_plan(apps):
         if pending:
             st.caption('単元データ未登録：'+'・'.join(pending)+'。登録後、自動選定の対象になります。')
         with st.expander('選び方・時間の目安について'):
-            st.write('こくご・そろばん・ずけいの3教科から、今日すでに学習した時間も含めて偏りが小さくなるように選びます。選べる単元が少ない教科は、他の教科で補います。')
+            st.write('こくご・そろばん・ずけい・えいごの4教科から、今日すでに学習した時間も含めて偏りが小さくなるように選びます。選べる単元が少ない教科は、他の教科で補います。')
             st.write('初回回答の正答率とアプリ内のヒント利用を単元別に確認します。十分な成績が複数回そろうと次の単元へ進み、つまずいた単元は繰り返します。')
             st.write('復習間隔は正答が続くと1→3→7→14→30日へ延ばし、つまずくと翌日に戻します。効果を保証する日数ではなく、成績に応じて調整する初期設定です。')
             st.write('年齢×10分はこのアプリの設定です。休憩は学習時間に含めず、まとめて続ける必要はありません。予定は残り時間の95〜100％を目指し、1日の目安の95％に達したら終了にします。同じ単元は1日3回までにします。')
@@ -2494,9 +2543,9 @@ function init(p,d){
    const target=event.target?.closest?.('button,a');if(!target||target.disabled)return;
    const anchor=target.closest('a.cm-subject,a[href]');
    if(anchor&&(anchor.classList.contains('cm-subject')||anchor.classList.contains('cm-plan-launch')||anchor.closest('[data-testid="stLinkButton"]'))){
-    const cls=anchor.className||'';let source=anchor.getAttribute?.('data-source')||['soroban','kotoba','geometry'].find(s=>cls.includes('cm-subject-'+s));
+    const cls=anchor.className||'';let source=anchor.getAttribute?.('data-source')||['soroban','kotoba','geometry','english'].find(s=>cls.includes('cm-subject-'+s));
     // For native link buttons, infer app ONLY from the registered fixed title labels.
-    if(!source){const label=(anchor.textContent||'').trim();source=label.startsWith('そろばん')?'soroban':label.startsWith('こくご')?'kotoba':label.startsWith('ずけい')?'geometry':'app'}
+    if(!source){const label=(anchor.textContent||'').trim();source=label.startsWith('そろばん')?'soroban':label.startsWith('こくご')?'kotoba':label.startsWith('ずけい')?'geometry':label.startsWith('えいご')?'english':'app'}
     state.add('external_app_open',source,{status:'destination_display_unmeasured'});state.persist();return;
    }
    let action=null;
@@ -2527,7 +2576,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'34';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'36';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
