@@ -237,7 +237,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='37', default=None)
+        app_version='38', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -2313,7 +2313,6 @@ def cm_plan_launch_links(items, apps):
     links={}; pending={}; payload=[]
     for item in items:
         revision=max(int(item.get('today_completed_count',0)),int(item.get('completed_count',0)))
-        if not revision and item.get('available_repetitions',0)<=0:continue
         app=app_map.get(item['source_app'])
         if not app or not _valid_https_url(app['url']):continue
         key='cm_link_plan_'+item['plan_item_id']; cached=st.session_state.get(key)
@@ -2424,13 +2423,11 @@ def cm_plan_items_html(items, links=None):
         medals=''.join('<span class="cm-plan-medal cm-plan-medal-'+html.escape(m['grade'])+'" aria-label="'+GRADE_NAMES[m['grade']]+'メダル">'+GRADE_NAMES[m['grade']]+'</span>' for m in item.get('medals',[]))
         retry=total>0 and count>=total
         badge='<span class="cm-plan-finished" role="status">🌸 達成済み</span>' if done else ''
-        if item.get('plan_item_id') in links and (retry or item.get('available_repetitions',0)>0):
+        if item.get('plan_item_id') in links:
             button_label='再チャレンジ' if retry else ('つづける' if count else 'はじめる')
             action='<a class="cm-plan-launch'+(' cm-plan-retry' if retry else '')+'" data-source="'+html.escape(item['source_app'])+'" aria-label="'+source+'・'+label+'を'+button_label+'" href="'+html.escape(links[item['plan_item_id']],quote=True)+'" target="_blank" rel="noopener noreferrer">'+button_label+('' if retry else ' <span aria-hidden="true">↗</span>')+'</a>'
         elif done:
             action=''
-        elif item.get('available_repetitions',0)<=0 and not retry:
-            action='<span class="cm-plan-postponed">きょうは ここまで</span>'
         else:
             action='<span class="cm-plan-postponed">接続を確認して<br>更新してください</span>'
         progress=f'{count}／{total}回' if count else f'全{total}回'
@@ -2501,7 +2498,7 @@ def render_daily_plan(apps):
             st.write('こくご・そろばん・ずけい・えいご・もじの5分野から、今日すでに学習した時間も含めて偏りが小さくなるように選びます。選べる単元が少ない教科は、他の教科で補います。')
             st.write('初回回答の正答率とアプリ内のヒント利用を単元別に確認します。十分な成績が複数回そろうと次の単元へ進み、つまずいた単元は繰り返します。')
             st.write('復習間隔は正答が続くと1→3→7→14→30日へ延ばし、つまずくと翌日に戻します。効果を保証する日数ではなく、成績に応じて調整する初期設定です。')
-            st.write('年齢×10分はこのアプリの設定です。休憩は学習時間に含めず、まとめて続ける必要はありません。予定は残り時間の95〜100％を目指し、1日の目安の95％に達したら終了にします。同じ単元は1日3回までにします。')
+            st.write('年齢×10分はこのアプリの設定です。休憩は学習時間に含めず、まとめて続ける必要はありません。自動で組む予定は残り時間の95〜100％を目指し、同じ単元は1日3回を目安にします。1日の目安の95％に達すると予定の自動追加を止めますが、表示済みの課題は時間や回数にかかわらず開けます。')
             st.write('所要時間は保証値ではありません。同じ条件の完了記録が3回以上そろうと直近10回までの実測中央値を使い、それまでは仮の目安を表示します。')
             st.caption('学習ログから判定する適応型モデルです。生成AIへのデータ送信やAPIの追加料金はありません。画面外での助力や内面の理解は断定しません。')
 
@@ -2583,7 +2580,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'37';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'38';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
