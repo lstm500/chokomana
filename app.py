@@ -50,8 +50,9 @@ FIELDS = (
     "total_count", "grade", "finished_at", "study_date",
 )
 GRADE_NAMES = {"gold": "金", "silver": "銀", "bronze": "銅", "white": "白"}
-SUBJECT_NAMES = {"kotoba": "国語", "soroban": "そろばん", "geometry": "図形", "english": "英語", "moji": "ひらがな・カタカナ"}
+SUBJECT_NAMES = {"kotoba": "国語", "soroban": "そろばん", "geometry": "図形", "english": "英語", "moji": "ひらがな・カタカナ", "reading": "読書"}
 APP_DEFINITIONS = (
+    {"id": "reading", "title": "ほんのともだち", "tag": "ほんを よむ おてつだい", "symbol": "読", "secret": "READING_APP_URL", "icon": "📖"},
     {"id": "kotoba", "title": "こくご・ことば", "tag": "ことばを広げる", "symbol": "言", "secret": "KOTOBA_APP_URL", "icon": "あ"},
     {"id": "soroban", "title": "そろばん", "tag": "計算にチャレンジ", "symbol": "算", "secret": "SOROBAN_APP_URL", "icon": "123"},
     {"id": "geometry", "title": "ずけいのアトリエ", "tag": "図形で考える", "symbol": "図", "secret": "GEOMETRY_APP_URL", "icon": "△"},
@@ -1030,13 +1031,14 @@ def cm_launch_connection_hints(apps):
 
 def home_cards_html(apps: list[dict]) -> str:
     """One native anchor per subject, kept side-by-side at phone widths."""
-    labels = {"kotoba": "こくご", "soroban": "そろばん", "geometry": "ずけい", "english": "えいご", "moji": "もじ"}
+    labels = {"kotoba": "こくご", "soroban": "そろばん", "geometry": "ずけい", "english": "えいご", "moji": "もじ", "reading": "どくしょ"}
     icons = {
         "kotoba": '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 13c10-3 17-1 24 4 7-5 14-7 24-4v37c-9-3-16-1-24 4-8-5-15-7-24-4Z" fill="currentColor" opacity=".16"/><path d="M8 13c10-3 17-1 24 4 7-5 14-7 24-4v37c-9-3-16-1-24 4-8-5-15-7-24-4Zm24 4v37M15 25l10 3m-10 7 10 3m14-10 10-3m-10 13 10-3" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
         "soroban": '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="10" width="52" height="44" rx="5" fill="currentColor" opacity=".12"/><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 10h52v44H6ZM7 28h50M19 14v36m13-36v36m13-36v36"/></g><g fill="currentColor"><path d="m12 21 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5ZM12 35l7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Z"/></g></svg>',
         "geometry": '<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="21" cy="23" r="14" fill="currentColor" opacity=".18"/><circle cx="21" cy="23" r="14" stroke="currentColor" stroke-width="3" fill="none"/><path d="m38 14 20 34H18Z" fill="currentColor" opacity=".3"/><path d="m38 14 20 34H18Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M8 40h19v17H8Z" fill="currentColor" opacity=".65"/></svg>',
     }
     icons['moji'] = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="5" width="44" height="54" rx="7" fill="currentColor" opacity=".14"/><path d="M16 21h24M16 32h15M16 43h12m4 7 4-12 14-14 8 8-14 14Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    icons['reading'] = icons['kotoba']
     icons['english'] = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="5" y="10" width="54" height="44" rx="12" fill="currentColor" opacity=".14"/><path d="M13 45 23 20l10 25M17 36h12M39 21v24h7c10 0 10-12 0-12h-7m0-12h6c9 0 9 12 0 12" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
     try:
         links = cm_prepare_launch_links(apps)
@@ -1082,7 +1084,7 @@ def render_home(apps: list[dict]) -> None:
         st.markdown(home_cards_html(apps), unsafe_allow_html=True)
         cm_diag_mark_ready()
     launch_cards()
-    @st.fragment(run_every=60)
+    @st.fragment(run_every=10)
     def daily_assignments():
         render_daily_plan(apps)
         cm_diag_mark_ready()
@@ -1269,7 +1271,7 @@ import streamlit.components.v1 as components
 
 CM_PUBLIC_URL = 'https://keewulninyoeylgflshb.supabase.co'
 CM_PUBLIC_KEY = 'sb_publishable_iud9MpcZSxZHzSczRTIDqg_4BNZWQ8g'
-CM_SOURCE_KEYS = ('kotoba','soroban','geometry','english','moji')
+CM_SOURCE_KEYS = ('kotoba','soroban','geometry','english','moji','reading')
 CM_TICKET_SECONDS = 900
 
 
@@ -1804,7 +1806,7 @@ def cm_launch_url(base,code):
     return urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode(query),''))
 
 # Adaptive planning uses observed responses, never medal colors or a language model's guesses.
-CM_PLANNER_VERSION = 'adaptive-5-medals'
+CM_PLANNER_VERSION = 'adaptive-6-graduations'
 
 
 def cm_plan_rows(table, params):
@@ -2225,14 +2227,14 @@ def cm_plan_candidates(menus, analysis, today):
     for (_, group), mm in sorted(groups.items()):
         mm.sort(key=lambda m: (m.get('difficulty_order') or 0,m['menu_id']))
         observed = [m for m in mm if key(m) in stats or ('learn' in m.get('mode_options',[]) and analysis['completed'].get(key(m),0))]
-        if not observed and not all(known.get(mid,{}).get('mastered') for mid in CM_TRACK_GATES.get(group, [])):
+        if not observed and not all((known.get(mid,{}).get('mastered') or known.get(mid,{}).get('graduated')) for mid in CM_TRACK_GATES.get(group, [])):
             continue
         # A demonstrated higher level can be the starting point; don't force every old level.
         frontier = max(observed,key=lambda m:m.get('difficulty_order') or 0) if observed else mm[0]
         fs = stats.get(key(frontier), {})
         learned = 'learn' in frontier.get('mode_options',[]) and analysis['completed'].get(key(frontier),0)>0
         advanced_by_medals=False;visited=set()
-        while (fs.get('mastered') or learned) and frontier['menu_id'] not in visited:
+        while (fs.get('mastered') or fs.get('graduated') or learned) and frontier['menu_id'] not in visited:
             visited.add(frontier['menu_id'])
             allowed_next = set(frontier.get('next_menu_ids') or [])
             nexts = [m for m in mm if m['menu_id'] in allowed_next and m['menu_id'] not in visited]
@@ -2243,6 +2245,7 @@ def cm_plan_candidates(menus, analysis, today):
         chosen = [frontier] + [m for m in observed if key(m)!=key(frontier) and stats.get(key(m),{}).get('due',today+timedelta(days=1))<=today]
         for m in chosen:
             ss = stats.get(key(m), {})
+            if ss.get('graduated'):continue
             if ss.get('mastered') and ss.get('due', today)>today:
                 continue
             required = m.get('prerequisite_skill_ids')
@@ -2455,12 +2458,54 @@ def cm_plan_launch_links(items, apps):
     return links
 
 
-def cm_load_daily_plan(age, allowed_sources=None):
+def cm_graduation_states(profile=None):
+    profile=profile or st.session_state['cm_profile']
+    return cm_plan_rows('chokomana_graduation_states',{'profile_id':'eq.'+profile,'select':'profile_id,source_app,items,revision','order':'source_app'})
+
+
+def cm_graduation_fingerprint(states):
+    return hashlib.sha256(json.dumps(sorted((r['source_app'],r['revision']) for r in states),separators=(',',':')).encode()).hexdigest()
+
+
+def cm_graduated_menus(menus,states):
+    """Manual unit recognition, or all current questions individually recognized."""
+    blocked=set();questions={}
+    for row in states:
+        source=row['source_app']
+        for key,value in (row.get('items') or {}).items():
+            record=value.get('record') if isinstance(value,dict) else None
+            if not isinstance(record,dict):continue
+            if key.startswith('unit:'):
+                blocked.add((source,key[5:]));continue
+            if key.startswith('question:') and record.get('catalog_question_id') and record.get('menu_id'):
+                questions.setdefault((source,record['menu_id']),set()).add(record['catalog_question_id'])
+    for menu in menus:
+        key=(menu['source_app'],menu['menu_id'])
+        if key in blocked or key not in questions:continue
+        rows=cm_plan_rows('chokomana_learning_catalog',{
+            'source_app':'eq.'+key[0],'entry_type':'eq.question','content_version':'eq.'+menu['content_version'],
+            'payload->menu_ids':'cs.'+json.dumps([key[1]],separators=(',',':')),'select':'entry_id','order':'entry_id'})
+        current={r['entry_id'] for r in rows}
+        if current and current.issubset(questions[key]):blocked.add(key)
+    return blocked
+
+
+def cm_without_graduated(payload,blocked):
+    payload={**payload,'items':[i for i in payload.get('items',[]) if (i['source_app'],i['menu_id']) not in blocked]}
+    payload['planned_ms']=sum(i['duration_ms']*i.get('available_repetitions',0) for i in payload['items'])
+    payload['sufficient']=payload.get('reached',False) or payload['planned_ms']>=payload.get('remaining_ms',0)*.95
+    return payload
+
+
+def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
     from uuid import uuid4
     profile=st.session_state['cm_profile'];today=now_jst().date();now=datetime.now(timezone.utc).isoformat()
     catalog=cm_plan_rows('chokomana_learning_catalog',{'entry_type':'eq.menu',
         'select':'entry_type,entry_id,source_app,content_version,payload,published_at','order':'source_app,entry_id,content_version'})
     menus=cm_plan_menus(catalog,age)
+    graduation_states=cm_graduation_states(profile) if graduation_states is None else graduation_states
+    graduation_fingerprint=cm_graduation_fingerprint(graduation_states)
+    graduated=cm_graduated_menus(menus,graduation_states)
     events=cm_plan_rows('chokomana_learning_events',{'profile_id':'eq.'+profile,
         'select':'event_id,profile_id,source_app,content_version,attempt_id,occurrence_id,question_id,sequence,occurred_at,event_type,payload','order':'occurred_at,event_id'})
     all_medals=cm_plan_rows('chokomana_stamps',{'profile_id':'eq.'+profile,
@@ -2475,13 +2520,17 @@ def cm_load_daily_plan(age, allowed_sources=None):
     subject_spent=cm_plan_subject_time(events,menus,profile,today,max(0,analysis['spent_ms']-sum(extras.values())))
     subject_spent={s:subject_spent.get(s,0)+extras.get(s,0) for s in SUBJECT_NAMES}
     target=age*10*60000;remaining=max(0,target-analysis['spent_ms']);reached=analysis['spent_ms']>=target*.95
-    candidates=cm_plan_candidates(menus,analysis,today)
+    for m in menus:
+        if (m['source_app'],m['menu_id']) in graduated:
+            analysis['stats'].setdefault((m['source_app'],m['menu_id'],m['content_version']),{})['graduated']=True
+    candidates=[c for c in cm_plan_candidates(menus,analysis,today) if (c['source_app'],c['menu_id']) not in graduated]
     if allowed_sources is not None:candidates=[c for c in candidates if c['source_app'] in allowed_sources]
     balance_sources=sorted({c['source_app'] for c in candidates})
-    rebalance=(old.get('planner_version')!=CM_PLANNER_VERSION or old.get('balance_sources')!=balance_sources or old.get('age')!=age or old.get('medal_progress_fingerprint')!=analysis['medal_progress_fingerprint'])
+    rebalance=(old.get('graduation_fingerprint')!=graduation_fingerprint or old.get('planner_version')!=CM_PLANNER_VERSION or old.get('balance_sources')!=balance_sources or old.get('age')!=age or old.get('medal_progress_fingerprint')!=analysis['medal_progress_fingerprint'])
     created=old.get('generated_at') or now
     items=[]
     for row in old.get('items',[]):
+        if (row['source_app'],row['menu_id']) in graduated:continue
         # Preserve card IDs/order through polling, navigation and repeat completions.
         item={**row};item.setdefault('plan_item_id',str(uuid4()));item.setdefault('assigned_at',created);items.append(item)
     items=cm_reconcile_plan(items,events,stamps,profile,today,created)
@@ -2512,7 +2561,7 @@ def cm_load_daily_plan(age, allowed_sources=None):
         i['available_repetitions']=allocations.get(i['plan_item_id'],0)
         i['today_completed_count']=analysis['today_counts'].get((i['source_app'],i['menu_id'],i['content_version']),0)
     planned=sum(i['duration_ms']*i['available_repetitions'] for i in items)
-    payload={'planner_version':CM_PLANNER_VERSION,'plan_schema':2,'medal_progress_fingerprint':analysis['medal_progress_fingerprint'],'medal_summary':analysis['medal_summary'],'subject_weights':analysis.get('subject_weights',{}),'balance_sources':balance_sources,'subject_spent_ms':subject_spent,'age':age,'target_ms':target,
+    payload={'planner_version':CM_PLANNER_VERSION,'graduation_fingerprint':graduation_fingerprint,'plan_schema':2,'medal_progress_fingerprint':analysis['medal_progress_fingerprint'],'medal_summary':analysis['medal_summary'],'subject_weights':analysis.get('subject_weights',{}),'balance_sources':balance_sources,'subject_spent_ms':subject_spent,'age':age,'target_ms':target,
         'spent_ms':analysis['spent_ms'],'measured_ms':analysis['measured_ms'],'estimated_ms':analysis['estimated_ms'],
         'missing_time':analysis['missing_time'],'partial_time':analysis['partial_time'],'remaining_ms':remaining,
         'planned_ms':planned,'items':items,'sources':sorted({m['source_app'] for m in menus}),
@@ -2524,12 +2573,12 @@ def cm_load_daily_plan(age, allowed_sources=None):
     else:
         saved=cm_account_request('POST','/rest/v1/chokomana_daily_plans',data,
             {'on_conflict':'profile_id,study_date'},'resolution=ignore-duplicates,return=representation')
-    if saved:return saved[0]['payload']
+    if saved:return cm_without_graduated(saved[0]['payload'],graduated)
     # Another device won the save: display its stable card identities, rather than overwriting them.
     latest=cm_account_request('GET','/rest/v1/chokomana_daily_plans',params={
         'profile_id':'eq.'+profile,'study_date':'eq.'+today.isoformat(),'select':'payload','limit':'1'})
     if not latest:raise RuntimeError('plan save could not be confirmed')
-    return latest[0]['payload']
+    return cm_without_graduated(latest[0]['payload'],graduated)
 
 
 def cm_minutes(ms):
@@ -2586,12 +2635,17 @@ def render_daily_plan(apps):
             st.info('年齢を設定すると、今日やる学習を自動で選びます。')
             render_plan_age()
             return
+        try:
+            graduations=cm_graduation_states()
+            graduation_fingerprint=cm_graduation_fingerprint(graduations)
+        except (RuntimeError,ValueError,KeyError,TypeError):
+            cm_error('修了情報を読み込めませんでした。「更新」で再試行してください。');return
         cached = st.session_state.get('cm_plan_snapshot')
-        cache_key = (st.session_state['cm_profile'],now_jst().date().isoformat(),age,CM_PLANNER_VERSION)
+        cache_key = (st.session_state['cm_profile'],now_jst().date().isoformat(),age,CM_PLANNER_VERSION,graduation_fingerprint)
         if refresh or not cached or cached['key']!=cache_key or time.time()-cached['at']>60:
             try:
                 with st.spinner('学習記録から、今日の内容を選んでいます…'):
-                    payload = cm_load_daily_plan(age,{a['id'] for a in apps if a['ready']})
+                    payload = cm_load_daily_plan(age,{a['id'] for a in apps if a['ready']},graduations)
                 cached = {'key':cache_key,'at':time.time(),'payload':payload}
                 st.session_state['cm_plan_snapshot']=cached
             except (RuntimeError,ValueError,KeyError,TypeError):
@@ -2674,7 +2728,7 @@ function init(p,d){
    const target=event.target?.closest?.('button,a');if(!target||target.disabled)return;
    const anchor=target.closest('a.cm-subject,a[href]');
    if(anchor&&(anchor.classList.contains('cm-subject')||anchor.classList.contains('cm-plan-launch')||anchor.closest('[data-testid="stLinkButton"]'))){
-    const cls=anchor.className||'';let source=anchor.getAttribute?.('data-source')||['soroban','kotoba','geometry','english','moji'].find(s=>cls.includes('cm-subject-'+s));
+    const cls=anchor.className||'';let source=anchor.getAttribute?.('data-source')||['soroban','kotoba','geometry','english','moji','reading'].find(s=>cls.includes('cm-subject-'+s));
     // For native link buttons, infer app ONLY from the registered fixed title labels.
     if(!source){const label=(anchor.textContent||'').trim();source=label.startsWith('そろばん')?'soroban':label.startsWith('こくご')?'kotoba':label.startsWith('ずけい')?'geometry':label.startsWith('えいご')?'english':label.startsWith('もじ')?'moji':'app'}
     state.add('external_app_open',source,{status:'destination_display_unmeasured'});state.persist();return;
