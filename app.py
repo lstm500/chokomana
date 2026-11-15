@@ -1806,7 +1806,17 @@ def cm_launch_url(base,code):
     return urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode(query),''))
 
 # Adaptive planning uses observed responses, never medal colors or a language model's guesses.
-CM_PLANNER_VERSION = 'adaptive-6-graduations'
+# Only the 29 choices shown inside Soroban's Challenge Mode belong in daily plans.
+CM_SOROBAN_CHALLENGE_MENUS = frozenset('soroban:calculation:'+mode for mode in (
+    'ba1','ba2','ba21','ba2x4','ba3','ba4','ba212','ba4x4','ba5','ba5x4',
+    'bs1','bs2','bs21','bs2x4','bs3','bs4','bs212','bs4x4','bs5','bs5x4',
+    'mm1','mm2','mm3','md1','md2','md3','a1','a2','a3'))
+CM_PLANNER_VERSION = 'adaptive-7-soroban-challenges'
+
+
+def cm_daily_menu_allowed(menu):
+    return menu.get('source_app')!='soroban' or menu.get('menu_id') in CM_SOROBAN_CHALLENGE_MENUS
+
 
 
 def cm_plan_rows(table, params):
@@ -2219,6 +2229,7 @@ def cm_plan_candidates(menus, analysis, today):
     def key(m): return (m['source_app'],m['menu_id'],m['content_version'])
     known = {m['menu_id']:stats.get(key(m),{}) for m in menus}
     for m in menus:
+        if not cm_daily_menu_allowed(m):continue
         if m['source_app']=='english':
             continue
         if 'reading_aloud' in m.get('mode_options', []):
@@ -2491,7 +2502,7 @@ def cm_graduated_menus(menus,states):
 
 
 def cm_without_graduated(payload,blocked):
-    payload={**payload,'items':[i for i in payload.get('items',[]) if (i['source_app'],i['menu_id']) not in blocked]}
+    payload={**payload,'items':[i for i in payload.get('items',[]) if cm_daily_menu_allowed(i) and (i['source_app'],i['menu_id']) not in blocked]}
     payload['planned_ms']=sum(i['duration_ms']*i.get('available_repetitions',0) for i in payload['items'])
     payload['sufficient']=payload.get('reached',False) or payload['planned_ms']>=payload.get('remaining_ms',0)*.95
     return payload
@@ -2530,7 +2541,7 @@ def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
     created=old.get('generated_at') or now
     items=[]
     for row in old.get('items',[]):
-        if (row['source_app'],row['menu_id']) in graduated:continue
+        if not cm_daily_menu_allowed(row) or (row['source_app'],row['menu_id']) in graduated:continue
         # Preserve card IDs/order through polling, navigation and repeat completions.
         item={**row};item.setdefault('plan_item_id',str(uuid4()));item.setdefault('assigned_at',created);items.append(item)
     items=cm_reconcile_plan(items,events,stamps,profile,today,created)
