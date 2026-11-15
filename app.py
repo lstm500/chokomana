@@ -52,12 +52,12 @@ FIELDS = (
 GRADE_NAMES = {"gold": "金", "silver": "銀", "bronze": "銅", "white": "白"}
 SUBJECT_NAMES = {"kotoba": "国語", "soroban": "そろばん", "geometry": "図形", "english": "英語", "moji": "ひらがな・カタカナ", "reading": "読書"}
 APP_DEFINITIONS = (
-    {"id": "reading", "title": "ほんのともだち", "tag": "ほんを よむ おてつだい", "symbol": "読", "secret": "READING_APP_URL", "icon": "📖"},
     {"id": "kotoba", "title": "こくご・ことば", "tag": "ことばを広げる", "symbol": "言", "secret": "KOTOBA_APP_URL", "icon": "あ"},
     {"id": "soroban", "title": "そろばん", "tag": "計算にチャレンジ", "symbol": "算", "secret": "SOROBAN_APP_URL", "icon": "123"},
     {"id": "geometry", "title": "ずけいのアトリエ", "tag": "図形で考える", "symbol": "図", "secret": "GEOMETRY_APP_URL", "icon": "△"},
     {"id": "moji", "title": "ひらがな・カタカナ", "tag": "もじを かこう", "symbol": "字", "secret": "MOJI_APP_URL", "icon": "あア"},
     {"id": "english", "title": "えいご・ジュニア", "tag": "おとと ことばで あそぼう", "symbol": "英", "secret": "ENGLISH_APP_URL", "icon": "ABC"},
+    {"id": "reading", "title": "ほんのともだち", "tag": "ほんを よむ おてつだい", "symbol": "読", "secret": "READING_APP_URL", "icon": "📖"},
 )
 
 
