@@ -237,7 +237,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='38', default=None)
+        app_version='39', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -1804,7 +1804,7 @@ def cm_launch_url(base,code):
     return urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode(query),''))
 
 # Adaptive planning uses observed responses, never medal colors or a language model's guesses.
-CM_PLANNER_VERSION = 'adaptive-4-moji'
+CM_PLANNER_VERSION = 'adaptive-5-medals'
 
 
 def cm_plan_rows(table, params):
@@ -2096,6 +2096,121 @@ CM_TRACK_GATES = {
 }
 
 
+def cm_medal_progress(analysis, medals, menus, events, profile, today):
+    """All owned medals, including free practice. Grades guide progression, not a diagnosis."""
+    from collections import defaultdict, Counter
+    import unicodedata
+    def norm(value):
+        return ''.join(unicodedata.normalize('NFKC',str(value or '')).split())
+    def key(m):return (m['source_app'],m['menu_id'],m['content_version'])
+    by_id={(m['source_app'],m['menu_id']):m for m in menus}
+    starts={}; ended=set(); spans=defaultdict(list);unmeasured=set()
+    lo=datetime.combine(today,datetime.min.time(),TOKYO);hi=lo+timedelta(days=1)
+    for event in sorted(events,key=lambda e:(e['occurred_at'],e.get('sequence',0),e['event_id'])):
+        if event.get('profile_id')!=profile:raise RuntimeError('learning owner mismatch')
+        aid=(event['source_app'],str(event['attempt_id']));p=event.get('payload') or {}
+        if event['event_type']=='session_started':starts[aid]=event
+        if event['event_type']=='session_ended' and p.get('status')=='completed':ended.add(aid)
+        if event['event_type']=='time_interval_closed' and (p.get('timing_quality')!='complete' or p.get('active_ms') is None):unmeasured.add(aid)
+        if event['event_type']=='time_interval_closed' and p.get('timing_quality')=='complete':
+            a,b=cm_plan_date(p.get('start_at')),cm_plan_date(p.get('end_at'));active=p.get('active_ms')
+            if a and b and b>a and isinstance(active,(int,float)) and abs((b-a).total_seconds()*1000-active)<=2 and b>lo and a<hi:
+                spans[aid].append((max(a,lo),min(b,hi)))
+    aliases={'beginner':'初級','intermediate':'中級','advanced':'上級','expert':'特級','master':'名人','1':'初級','2':'中級','3':'上級'}
+    lookup=defaultdict(list)
+    for m in menus:lookup[(m['source_app'],norm(m.get('category_id')))].append(m)
+    buckets=defaultdict(list);seen={};unmapped=0;fingerprint=[]
+    for row in medals:
+        if row.get('profile_id')!=profile:raise RuntimeError('medal owner mismatch')
+        if row.get('grade') not in GRADE_NAMES:continue
+        aid=(row.get('source_app'),str(row.get('attempt_id')))
+        if aid in seen:
+            if seen[aid]!=row:raise RuntimeError('medal attempt conflict')
+            continue
+        seen[aid]=row
+        start=starts.get(aid);m=None
+        if start:m=by_id.get((aid[0],(start.get('payload') or {}).get('menu_id')))
+        # A legacy stamp without a start log is usable only when one exact unit matches.
+        if not m:
+            difficulty=norm(row.get('difficulty'))
+            matches=[]
+            for candidate in lookup.get((aid[0],norm(row.get('category_key'))),[]):
+                names={norm(candidate.get('difficulty_id')),norm(candidate.get('label')),norm(aliases.get(str(candidate.get('difficulty_id'))))}
+                names.discard('')
+                if difficulty and difficulty in names:matches.append(candidate)
+            if len(matches)==1:m=matches[0]
+        when=cm_plan_date(row.get('finished_at'))
+        if not m or not when or when.astimezone(TOKYO).date()>today:
+            unmapped+=1;continue
+        entry={**row,'when':when,'aid':aid};buckets[key(m)].append(entry)
+        fingerprint.append((aid[0],aid[1],row['grade'],row.get('finished_at')))
+    summaries={s:Counter() for s in SUBJECT_NAMES};stats=analysis['stats'];weights=defaultdict(list);extra_by_source=defaultdict(int)
+    for m in menus:
+        k=key(m);rows=sorted(buckets.get(k,[]),key=lambda r:(r['when'],r['aid'][1]));recent=rows[-10:]
+        if not recent:continue
+        counts=Counter(r['grade'] for r in rows);summaries[m['source_app']].update(counts)
+        consecutive=0
+        for row in reversed(recent):
+            if row['grade']!='gold':break
+            consecutive+=1
+        recent5=recent[-5:];recent_weights=[.85**(len(recent)-i-1) for i in range(len(recent))];den=sum(recent_weights)
+        gold_rate=sum(w for w,r in zip(recent_weights,recent) if r['grade']=='gold')/den
+        quality=sum(w*{'gold':1.,'silver':.65,'bronze':.35,'white':.05}[r['grade']] for w,r in zip(recent_weights,recent))/den
+        practice_only=(m['source_app']=='moji' or m.get('assessment_method') in ('self_report','guided_exposure','self_confirmation'))
+        advance=not practice_only and (consecutive>=2 or (len(recent5)>=3 and sum(r['grade']=='gold' for r in recent5)/len(recent5)>=.8 and recent[-1]['grade']=='gold'))
+        weak=not practice_only and not advance and len(recent)>=2 and (gold_rate<.5 or all(r['grade']!='gold' for r in recent[-2:]))
+        ms={'total':len(rows),'counts':dict(counts),'recent_count':len(recent),'gold_rate':gold_rate,'quality':quality,'gold_streak':consecutive,
+            'advance':advance,'weak':weak,'best_grade':'gold' if counts['gold'] else 'silver' if counts['silver'] else 'bronze' if counts['bronze'] else 'white',
+            'last_day':recent[-1]['when'].astimezone(TOKYO).date(),'practice_only':practice_only}
+        ss=stats.setdefault(k,{'mastered':False,'weak':False,'accuracy':None,'posterior':.5,'count':0,'attempts':0,'practice_ready':False,'last_day':ms['last_day'],'due':today})
+        ss['medals']=ms
+        if not practice_only:
+            if advance:
+                ss.update(mastered=True,weak=False,due=ms['last_day']+timedelta(days=(3,7,14,30)[min(max(consecutive-2,0),3)]))
+            elif len(recent)>=2:
+                ss.update(mastered=False,weak=weak,posterior=quality)
+                if weak:ss['due']=today
+            if counts['gold']:ss['practice_ready']=True
+            need=.75+1.5*(0. if advance else 1-gold_rate)
+            weights[m['source_app']].append((1+(need-1)*min(1,len(recent)/3),min(len(recent),5)))
+            # Old medals can predate detailed logging; retain those completed attempts too.
+            logged_ids={aid for aid,start in starts.items() if aid in ended and aid[0]==m['source_app'] and start['payload'].get('menu_id')==m['menu_id']}
+            all_ids=logged_ids|{r['aid'] for r in rows}
+            analysis['completed'][k]=max(analysis['completed'].get(k,0),len(all_ids))
+            today_ids={r['aid'] for r in rows if r['when'].astimezone(TOKYO).date()==today}
+            analysis['today_counts'][k]=max(analysis['today_counts'].get(k,0),len(today_ids))
+            for row in rows:
+                start=starts.get(row['aid']);old_version=start and (m['source_app'],m['menu_id'],start['content_version'])!=k
+                missing_old=old_version and row['aid'] in ended and (row['aid'] in unmeasured or not spans[row['aid']])
+                if (row['aid'] not in ended or missing_old) and row['when'].astimezone(TOKYO).date()==today:
+                    actual=sum((b-a).total_seconds()*1000 for a,b in cm_plan_union(spans[row['aid']]))
+                    extra=max(0,m['estimated_duration_ms']-actual)
+                    analysis['spent_ms']+=round(extra);analysis['estimated_ms']+=round(extra)
+                    if row['aid'] not in ended:analysis['missing_time']+=1
+                    extra_by_source[m['source_app']]+=round(extra)
+    analysis['medal_stats']={k:v['medals'] for k,v in stats.items() if 'medals' in v}
+    analysis['subject_weights']={s:sum(w*n for w,n in values)/sum(n for _,n in values) for s,values in weights.items()}
+    analysis['legacy_medal_ms_by_source']=dict(extra_by_source)
+    analysis['medal_summary']={s:dict(counts) for s,counts in summaries.items()}
+    analysis['medal_unmapped']=unmapped
+    analysis['medal_progress_fingerprint']=hashlib.sha256(json.dumps(sorted(fingerprint),ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+    return analysis
+
+
+def cm_medal_candidate(candidate, analysis):
+    """Use one shared grade policy for all apps; worksheet self-checks remain practice."""
+    k=(candidate['source_app'],candidate['menu_id'],candidate['content_version']);ms=analysis.get('medal_stats',{}).get(k)
+    candidate['subject_need_weight']=analysis.get('subject_weights',{}).get(candidate['source_app'],1.)
+    if ms and not ms['practice_only']:
+        candidate['medal_gold_rate']=ms['gold_rate']
+        if ms['weak']:
+            candidate['score']=max(candidate['score'],150+30*(1-ms['gold_rate']))
+            candidate['reason']='銀・銅・通常メダルが多いので、くり返し練習'
+        elif ms['advance']:
+            candidate['reason']='金メダルが続いた単元の復習'
+    return candidate
+
+
 def cm_plan_candidates(menus, analysis, today):
     from collections import defaultdict
     groups = defaultdict(list); stats = analysis['stats']; candidates = []
@@ -2116,11 +2231,15 @@ def cm_plan_candidates(menus, analysis, today):
         frontier = max(observed,key=lambda m:m.get('difficulty_order') or 0) if observed else mm[0]
         fs = stats.get(key(frontier), {})
         learned = 'learn' in frontier.get('mode_options',[]) and analysis['completed'].get(key(frontier),0)>0
-        if fs.get('mastered') or learned:
+        advanced_by_medals=False;visited=set()
+        while (fs.get('mastered') or learned) and frontier['menu_id'] not in visited:
+            visited.add(frontier['menu_id'])
             allowed_next = set(frontier.get('next_menu_ids') or [])
-            nexts = [m for m in mm if m['menu_id'] in allowed_next]
-            if nexts:
-                frontier = nexts[0]
+            nexts = [m for m in mm if m['menu_id'] in allowed_next and m['menu_id'] not in visited]
+            if not nexts:break
+            advanced_by_medals=advanced_by_medals or bool(fs.get('medals',{}).get('advance'))
+            frontier=nexts[0];fs=stats.get(key(frontier),{})
+            learned='learn' in frontier.get('mode_options',[]) and analysis['completed'].get(key(frontier),0)>0
         chosen = [frontier] + [m for m in observed if key(m)!=key(frontier) and stats.get(key(m),{}).get('due',today+timedelta(days=1))<=today]
         for m in chosen:
             ss = stats.get(key(m), {})
@@ -2139,6 +2258,8 @@ def cm_plan_candidates(menus, analysis, today):
                 reason, score = ('学んだ教材のつづき' if 'learn' in m.get('mode_options',[]) else '得意をのばす・次の単元'), 100
             else:
                 reason, score = ('理解をたしかめる', 75) if ss else ('はじめの力だめし', 70)
+            if key(m)==key(frontier) and advanced_by_medals and not ss:
+                reason,score='金メダルが続いたので、次の単元へ',108
             if m['source_app']=='moji':
                 reason,score='文字を書く練習',70
             estimate = analysis['durations'].get(key(m))
@@ -2149,41 +2270,40 @@ def cm_plan_candidates(menus, analysis, today):
             candidates.append({**m, 'duration_ms':int(duration), 'duration_basis':'measured' if measured else 'provisional',
                 'reason':reason, 'score':score, 'key':key(m), 'accuracy':ss.get('accuracy')})
     candidates.extend(cm_english_candidates(menus, analysis, today))
-    return candidates
+    return [cm_medal_candidate(c,analysis) for c in candidates]
 
 
 def cm_english_candidates(menus, analysis, today):
-    english = [m for m in menus if m['source_app']=='english']
-    key = lambda m: ('english',m['menu_id'],m['content_version'])
-    completed = analysis['completed']; stats = analysis['stats']
-    alphabet = sorted([m for m in english if m.get('learning_stage')=='alphabet'],key=lambda m:m['menu_id'])
-    next_alphabet = next((m['menu_id'] for m in alphabet if not completed.get(key(m),0)),None)
-    by_id = {m['menu_id']:m for m in english}; result = []
+    english=[m for m in menus if m['source_app']=='english'];stats=analysis['stats'];completed=analysis['completed']
+    key=lambda m:('english',m['menu_id'],m['content_version'])
+    by_id={m['menu_id']:m for m in english}
+    def ss(m):return stats.get(key(m),{})
+    def best_gold(mid):return mid in by_id and ss(by_id[mid]).get('medals',{}).get('best_grade')=='gold'
+    def passed(mid):
+        if mid not in by_id:return False
+        row=ss(by_id[mid])
+        return best_gold(mid) or row.get('mastered') or row.get('practice_ready')
+    alphabet=sorted((m for m in english if m.get('learning_stage')=='alphabet'),key=lambda m:(m.get('difficulty_order') or 0,m['menu_id']))
+    frontier=next((m['menu_id'] for m in alphabet if not ss(m).get('mastered')),None)
+    result=[]
     for m in english:
-        k=key(m); ss=stats.get(k,{})
-        stage=m.get('learning_stage')
-        if stage=='alphabet' and m['menu_id']!=next_alphabet:
-            continue
+        k=key(m);row=ss(m);stage=m.get('learning_stage');required=m.get('requires_menu_ids') or []
+        gate=(m.get('unlock_requirements') or {}).get('all_best_grade_gold') or []
+        if gate and not all(best_gold(mid) for mid in gate):continue
         if stage=='quiz':
-            required=m.get('requires_menu_ids') or []
-            if not required or not all(mid in by_id and completed.get(key(by_id[mid]),0)>0
-                    and stats.get(key(by_id[mid]),{}).get('practice_ready') for mid in required):
-                continue
-            if ss.get('mastered') and ss.get('due',today)>today:
-                continue
-        if stage!='quiz':
-            reason,score='おとと ことばの練習',70 if not completed.get(k,0) else 60
-        elif ss.get('weak'):
-            reason,score='もういちど練習',110+20*(1-ss['posterior'])
-        elif ss and ss.get('due',today)<=today:
-            reason,score='思い出す復習',105+min(15,(today-ss['due']).days)
-        else:
-            reason,score='理解をたしかめる',75
+            if required and not all(passed(mid) for mid in required):continue
+        elif required and not all(mid in by_id and (completed.get(key(by_id[mid]),0)>0 or passed(mid)) for mid in required):continue
+        if stage=='alphabet' and m['menu_id']!=frontier and not row:continue
+        if row.get('mastered') and row.get('due',today)>today:continue
+        predecessors=[p for p in english if m['menu_id'] in (p.get('next_menu_ids') or []) and ss(p).get('medals',{}).get('advance')]
+        if row.get('weak'):reason,score='もういちど練習',110+20*(1-row['posterior'])
+        elif row and row.get('due',today)<=today:reason,score='思い出す復習',105+min(15,(today-row['due']).days)
+        elif predecessors:reason,score='金メダルが続いたので、次の単元へ',108
+        else:reason,score='おとと ことばの練習' if stage in ('alphabet','matching','speech') else '理解をたしかめる',70
         estimate=analysis['durations'].get(k)
         measured=bool(estimate and estimate['question_count']==m.get('question_count_default',m.get('planned_question_count')))
         duration=estimate['ms'] if measured else m['estimated_duration_ms']
-        result.append({**m,'duration_ms':int(duration),'duration_basis':'measured' if measured else 'provisional',
-            'reason':reason,'score':score,'key':k,'accuracy':ss.get('accuracy') if stage=='quiz' else None})
+        result.append({**m,'duration_ms':int(duration),'duration_basis':'measured' if measured else 'provisional','reason':reason,'score':score,'key':k,'accuracy':row.get('accuracy')})
     return result
 
 
@@ -2199,7 +2319,9 @@ def cm_build_daily_plan(candidates, remaining_ms, today_counts, subject_spent_ms
         if c.get('duration_ms',0)>0:grouped[c['source_app']].append(c)
     sources=[s for s in SUBJECT_NAMES if s in grouped or spent.get(s,0)>0]
     if not sources:return []
-    target=(remaining_ms+sum(spent.get(s,0) for s in sources))/len(sources)
+    needs={source:max([float(c.get('subject_need_weight',1.)) for c in grouped[source]] or [1.]) for source in sources}
+    total_need=sum(needs.values())
+    targets={source:(remaining_ms+sum(spent.get(s,0) for s in sources))*needs[source]/total_need for source in sources}
     # First retain the best learning priority for each feasible time within a subject.
     options={}
     for source in sources:
@@ -2225,6 +2347,7 @@ def cm_build_daily_plan(candidates, remaining_ms, today_counts, subject_spent_ms
                 total=used+amount
                 if total>capacity:continue
                 daily=spent.get(source,0)+amount*10000
+                target=targets[source]
                 score=(value[0]+int(daily>0),value[1]-((daily-target)/max(target,1))**2,value[2]+quality)
                 if total not in nxt or score>nxt[total][0]:nxt[total]=(score,path+selection)
         combined=nxt
@@ -2340,25 +2463,29 @@ def cm_load_daily_plan(age, allowed_sources=None):
     menus=cm_plan_menus(catalog,age)
     events=cm_plan_rows('chokomana_learning_events',{'profile_id':'eq.'+profile,
         'select':'event_id,profile_id,source_app,content_version,attempt_id,occurrence_id,question_id,sequence,occurred_at,event_type,payload','order':'occurred_at,event_id'})
-    stamps=cm_plan_rows('chokomana_stamps',{'profile_id':'eq.'+profile,'study_date':'eq.'+today.isoformat(),
-        'select':'profile_id,source_app,attempt_id,study_date,grade,stamp_char','order':'finished_at,stamp_id'})
+    all_medals=cm_plan_rows('chokomana_stamps',{'profile_id':'eq.'+profile,
+        'select':','.join(FIELDS),'order':'finished_at,stamp_id'})
+    stamps=[r for r in all_medals if r.get('study_date')==today.isoformat()]
     found=cm_account_request('GET','/rest/v1/chokomana_daily_plans',params={
         'profile_id':'eq.'+profile,'study_date':'eq.'+today.isoformat(),'select':'payload,updated_at','limit':'1'})
     previous=found[0] if found else None
     old=previous['payload'] if previous else {}
-    analysis=cm_plan_analyze(events,menus,profile,today)
-    subject_spent=cm_plan_subject_time(events,menus,profile,today,analysis['spent_ms'])
+    analysis=cm_medal_progress(cm_plan_analyze(events,menus,profile,today),all_medals,menus,events,profile,today)
+    extras=analysis.get('legacy_medal_ms_by_source',{})
+    subject_spent=cm_plan_subject_time(events,menus,profile,today,max(0,analysis['spent_ms']-sum(extras.values())))
+    subject_spent={s:subject_spent.get(s,0)+extras.get(s,0) for s in SUBJECT_NAMES}
     target=age*10*60000;remaining=max(0,target-analysis['spent_ms']);reached=analysis['spent_ms']>=target*.95
     candidates=cm_plan_candidates(menus,analysis,today)
     if allowed_sources is not None:candidates=[c for c in candidates if c['source_app'] in allowed_sources]
     balance_sources=sorted({c['source_app'] for c in candidates})
-    rebalance=(old.get('planner_version')!=CM_PLANNER_VERSION or old.get('balance_sources')!=balance_sources or old.get('age')!=age)
+    rebalance=(old.get('planner_version')!=CM_PLANNER_VERSION or old.get('balance_sources')!=balance_sources or old.get('age')!=age or old.get('medal_progress_fingerprint')!=analysis['medal_progress_fingerprint'])
     created=old.get('generated_at') or now
     items=[]
     for row in old.get('items',[]):
         # Preserve card IDs/order through polling, navigation and repeat completions.
         item={**row};item.setdefault('plan_item_id',str(uuid4()));item.setdefault('assigned_at',created);items.append(item)
     items=cm_reconcile_plan(items,events,stamps,profile,today,created)
+    for item in items:cm_medal_candidate(item,analysis)
     # Upgrade only untouched work. Preserve finished cards, partial work, IDs and medals.
     if rebalance:
         items=[i for i in items if i['completed_count'] or cm_plan_started(i,events)]
@@ -2385,7 +2512,7 @@ def cm_load_daily_plan(age, allowed_sources=None):
         i['available_repetitions']=allocations.get(i['plan_item_id'],0)
         i['today_completed_count']=analysis['today_counts'].get((i['source_app'],i['menu_id'],i['content_version']),0)
     planned=sum(i['duration_ms']*i['available_repetitions'] for i in items)
-    payload={'planner_version':CM_PLANNER_VERSION,'plan_schema':2,'balance_sources':balance_sources,'subject_spent_ms':subject_spent,'age':age,'target_ms':target,
+    payload={'planner_version':CM_PLANNER_VERSION,'plan_schema':2,'medal_progress_fingerprint':analysis['medal_progress_fingerprint'],'medal_summary':analysis['medal_summary'],'subject_weights':analysis.get('subject_weights',{}),'balance_sources':balance_sources,'subject_spent_ms':subject_spent,'age':age,'target_ms':target,
         'spent_ms':analysis['spent_ms'],'measured_ms':analysis['measured_ms'],'estimated_ms':analysis['estimated_ms'],
         'missing_time':analysis['missing_time'],'partial_time':analysis['partial_time'],'remaining_ms':remaining,
         'planned_ms':planned,'items':items,'sources':sorted({m['source_app'] for m in menus}),
@@ -2495,8 +2622,8 @@ def render_daily_plan(apps):
         if pending:
             st.caption('単元データ未登録：'+'・'.join(pending)+'。登録後、自動選定の対象になります。')
         with st.expander('選び方・時間の目安について'):
-            st.write('こくご・そろばん・ずけい・えいご・もじの5分野から、今日すでに学習した時間も含めて偏りが小さくなるように選びます。選べる単元が少ない教科は、他の教科で補います。')
-            st.write('初回回答の正答率とアプリ内のヒント利用を単元別に確認します。十分な成績が複数回そろうと次の単元へ進み、つまずいた単元は繰り返します。')
+            st.write('こくご・そろばん・ずけい・えいご・もじの5分野から、今日すでに学習した時間とメダルの傾向を使い、苦手な分野を多めにしながら、ほかの分野も含めて選びます。選べる単元が少ない教科は、他の教科で補います。')
+            st.write('今日のリスト以外の自由な学習も含め、保存済みの全メダルを単元・難易度別に集計します。直近10回を中心に、金が2回連続、または直近3〜5回の金の割合が8割以上で最後も金なら次の単元を優先します。銀・銅・通常メダルが多い単元は、回数と教科の時間配分を増やします。文字の自己確認メダルは取り組みの記録として扱い、自動進級には使いません。')
             st.write('復習間隔は正答が続くと1→3→7→14→30日へ延ばし、つまずくと翌日に戻します。効果を保証する日数ではなく、成績に応じて調整する初期設定です。')
             st.write('年齢×10分はこのアプリの設定です。休憩は学習時間に含めず、まとめて続ける必要はありません。自動で組む予定は残り時間の95〜100％を目指し、同じ単元は1日3回を目安にします。1日の目安の95％に達すると予定の自動追加を止めますが、表示済みの課題は時間や回数にかかわらず開けます。')
             st.write('所要時間は保証値ではありません。同じ条件の完了記録が3回以上そろうと直近10回までの実測中央値を使い、それまでは仮の目安を表示します。')
@@ -2580,7 +2707,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'38';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'39';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
