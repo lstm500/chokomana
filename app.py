@@ -1503,16 +1503,45 @@ def cm_launch_url(base,code):
     return urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode(query),''))
 
 # Adaptive planning uses observed responses, never medal colors or a language model's guesses.
-# Only the 29 choices shown inside Soroban's Challenge Mode belong in daily plans.
+# Keep Soroban's 29 calculation challenges; multiplication facts unlock after the single-digit basics.
 CM_SOROBAN_CHALLENGE_MENUS = frozenset('soroban:calculation:'+mode for mode in (
     'ba1','ba2','ba21','ba2x4','ba3','ba4','ba212','ba4x4','ba5','ba5x4',
     'bs1','bs2','bs21','bs2x4','bs3','bs4','bs212','bs4x4','bs5','bs5x4',
     'mm1','mm2','mm3','md1','md2','md3','a1','a2','a3'))
-CM_PLANNER_VERSION = 'adaptive-7-soroban-challenges'
+CM_SOROBAN_KUKU_MENUS = frozenset('soroban:kuku:'+str(level) for level in range(1,6))
+CM_SOROBAN_KUKU_PREREQUISITES = ('soroban:calculation:ba1','soroban:calculation:ba2','soroban:calculation:bs1')
+CM_PLANNER_VERSION = 'adaptive-9-without-moji'
 
 
-def cm_daily_menu_allowed(menu):
-    return menu.get('source_app')!='soroban' or menu.get('menu_id') in CM_SOROBAN_CHALLENGE_MENUS
+def cm_daily_menu_allowed(menu, kuku_ready=False):
+    # Handwriting is currently done in a notebook; keep the app accessible separately.
+    if menu.get('source_app')=='moji':return False
+    return (menu.get('source_app')!='soroban' or menu.get('menu_id') in CM_SOROBAN_CHALLENGE_MENUS
+            or (kuku_ready and menu.get('menu_id') in CM_SOROBAN_KUKU_MENUS))
+
+
+def cm_soroban_kuku_ready(menus,analysis):
+    by_id={m['menu_id']:analysis['stats'].get((m['source_app'],m['menu_id'],m['content_version']),{}) for m in menus if m['source_app']=='soroban'}
+    return all(by_id.get(mid,{}).get('mastered') or by_id.get(mid,{}).get('graduated') for mid in CM_SOROBAN_KUKU_PREREQUISITES)
+
+
+def cm_kuku_today_count(analysis):
+    return sum(n for (source,mid,version),n in analysis['today_counts'].items() if source=='soroban' and mid in CM_SOROBAN_KUKU_MENUS)
+
+
+def cm_allocate_with_daily_kuku(pending,remaining,limits,subject_spent,required_id=None):
+    required=next((p for p in pending if p['plan_item_id']==required_id),None)
+    if not required or remaining<required['duration_ms']:
+        return cm_build_daily_plan(pending,remaining,limits,subject_spent)
+    # Reserve one real attempt, then allocate only the unused budget as before.
+    updated=dict(limits);updated[required['key']]=updated.get(required['key'],0)+1
+    spent=dict(subject_spent);spent['soroban']=spent.get('soroban',0)+required['duration_ms']
+    selected=cm_build_daily_plan(pending,remaining-required['duration_ms'],updated,spent)
+    match=next((p for p in selected if p['plan_item_id']==required_id),None)
+    if match:match['repetitions']+=1
+    else:selected.insert(0,{**required,'repetitions':1})
+    return selected
+
 
 
 
@@ -1925,8 +1954,9 @@ def cm_plan_candidates(menus, analysis, today):
     groups = defaultdict(list); stats = analysis['stats']; candidates = []
     def key(m): return (m['source_app'],m['menu_id'],m['content_version'])
     known = {m['menu_id']:stats.get(key(m),{}) for m in menus}
+    kuku_ready=cm_soroban_kuku_ready(menus,analysis)
     for m in menus:
-        if not cm_daily_menu_allowed(m):continue
+        if not cm_daily_menu_allowed(m,kuku_ready):continue
         if m['source_app']=='english':
             continue
         if 'reading_aloud' in m.get('mode_options', []):
@@ -1971,6 +2001,8 @@ def cm_plan_candidates(menus, analysis, today):
                 reason, score = ('理解をたしかめる', 75) if ss else ('はじめの力だめし', 70)
             if key(m)==key(frontier) and advanced_by_medals and not ss:
                 reason,score='金メダルが続いたので、次の単元へ',108
+            if m['source_app']=='soroban' and m['menu_id'] in CM_SOROBAN_KUKU_MENUS and not ss:
+                reason,score='1桁の足し算・引き算をクリアしたので、九九の暗記',max(score,100)
             if m['source_app']=='moji':
                 reason,score='文字を書く練習',70
             estimate = analysis['durations'].get(key(m))
@@ -2198,8 +2230,8 @@ def cm_graduated_menus(menus,states):
     return blocked
 
 
-def cm_without_graduated(payload,blocked):
-    payload={**payload,'items':[i for i in payload.get('items',[]) if cm_daily_menu_allowed(i) and (i['source_app'],i['menu_id']) not in blocked]}
+def cm_without_graduated(payload,blocked,kuku_ready=False):
+    payload={**payload,'items':[i for i in payload.get('items',[]) if cm_daily_menu_allowed(i,kuku_ready) and (i['source_app'],i['menu_id']) not in blocked]}
     payload['planned_ms']=sum(i['duration_ms']*i.get('available_repetitions',0) for i in payload['items'])
     payload['sufficient']=payload.get('reached',False) or payload['planned_ms']>=payload.get('remaining_ms',0)*.95
     return payload
@@ -2231,14 +2263,15 @@ def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
     for m in menus:
         if (m['source_app'],m['menu_id']) in graduated:
             analysis['stats'].setdefault((m['source_app'],m['menu_id'],m['content_version']),{})['graduated']=True
+    kuku_ready=cm_soroban_kuku_ready(menus,analysis)
     candidates=[c for c in cm_plan_candidates(menus,analysis,today) if (c['source_app'],c['menu_id']) not in graduated]
     if allowed_sources is not None:candidates=[c for c in candidates if c['source_app'] in allowed_sources]
     balance_sources=sorted({c['source_app'] for c in candidates})
-    rebalance=(old.get('graduation_fingerprint')!=graduation_fingerprint or old.get('planner_version')!=CM_PLANNER_VERSION or old.get('balance_sources')!=balance_sources or old.get('age')!=age or old.get('medal_progress_fingerprint')!=analysis['medal_progress_fingerprint'])
+    rebalance=(old.get('kuku_ready')!=kuku_ready or old.get('graduation_fingerprint')!=graduation_fingerprint or old.get('planner_version')!=CM_PLANNER_VERSION or old.get('balance_sources')!=balance_sources or old.get('age')!=age or old.get('medal_progress_fingerprint')!=analysis['medal_progress_fingerprint'])
     created=old.get('generated_at') or now
     items=[]
     for row in old.get('items',[]):
-        if not cm_daily_menu_allowed(row) or (row['source_app'],row['menu_id']) in graduated:continue
+        if not cm_daily_menu_allowed(row,kuku_ready) or (row['source_app'],row['menu_id']) in graduated:continue
         # Preserve card IDs/order through polling, navigation and repeat completions.
         item={**row};item.setdefault('plan_item_id',str(uuid4()));item.setdefault('assigned_at',created);items.append(item)
     items=cm_reconcile_plan(items,events,stamps,profile,today,created)
@@ -2246,7 +2279,18 @@ def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
     # Upgrade only untouched work. Preserve finished cards, partial work, IDs and medals.
     if rebalance:
         items=[i for i in items if i['completed_count'] or cm_plan_started(i,events)]
-    if not reached and (rebalance or not items or all(i['done'] for i in items)):
+    needs_items=rebalance or not items or all(i['done'] for i in items)
+    required_kuku_id=None
+    if kuku_ready and not reached and cm_kuku_today_count(analysis)==0:
+        existing=next((i for i in items if i['source_app']=='soroban' and i['menu_id'] in CM_SOROBAN_KUKU_MENUS and not i['done']),None)
+        if existing:required_kuku_id=existing['plan_item_id']
+        else:
+            choice=next((c for c in candidates if c['source_app']=='soroban' and c['menu_id'] in CM_SOROBAN_KUKU_MENUS),None)
+            reserved=sum(i['duration_ms']*max(0,i['repetitions']-i['completed_count']) for i in items)
+            if choice and choice['duration_ms']<=max(0,remaining-reserved):
+                required_kuku_id=str(uuid4())
+                items.append({**choice,'repetitions':1,'plan_item_id':required_kuku_id,'assigned_at':now,'completed_count':0,'completed_attempts':[],'medals':[],'done':False})
+    if not reached and needs_items:
         committed=dict(subject_spent);counts=dict(analysis['today_counts']);reserved=0
         for i in items:
             left=max(0,i['repetitions']-i['completed_count'])
@@ -2263,13 +2307,13 @@ def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
         if i['done']:continue
         key=(i['source_app'],i['menu_id'],i['content_version'])
         pending.append({**i,'key':key});limits[key]=3-(i['repetitions']-i['completed_count'])
-    selected=[] if reached else cm_build_daily_plan(pending,remaining,limits,subject_spent)
+    selected=[] if reached else cm_allocate_with_daily_kuku(pending,remaining,limits,subject_spent,required_kuku_id)
     allocations={i['plan_item_id']:i['repetitions'] for i in selected}
     for i in items:
         i['available_repetitions']=allocations.get(i['plan_item_id'],0)
         i['today_completed_count']=analysis['today_counts'].get((i['source_app'],i['menu_id'],i['content_version']),0)
     planned=sum(i['duration_ms']*i['available_repetitions'] for i in items)
-    payload={'planner_version':CM_PLANNER_VERSION,'graduation_fingerprint':graduation_fingerprint,'plan_schema':2,'medal_progress_fingerprint':analysis['medal_progress_fingerprint'],'medal_summary':analysis['medal_summary'],'subject_weights':analysis.get('subject_weights',{}),'balance_sources':balance_sources,'subject_spent_ms':subject_spent,'age':age,'target_ms':target,
+    payload={'planner_version':CM_PLANNER_VERSION,'kuku_ready':kuku_ready,'graduation_fingerprint':graduation_fingerprint,'plan_schema':2,'medal_progress_fingerprint':analysis['medal_progress_fingerprint'],'medal_summary':analysis['medal_summary'],'subject_weights':analysis.get('subject_weights',{}),'balance_sources':balance_sources,'subject_spent_ms':subject_spent,'age':age,'target_ms':target,
         'spent_ms':analysis['spent_ms'],'measured_ms':analysis['measured_ms'],'estimated_ms':analysis['estimated_ms'],
         'missing_time':analysis['missing_time'],'partial_time':analysis['partial_time'],'remaining_ms':remaining,
         'planned_ms':planned,'items':items,'sources':sorted({m['source_app'] for m in menus}),
@@ -2281,12 +2325,12 @@ def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
     else:
         saved=cm_account_request('POST','/rest/v1/chokomana_daily_plans',data,
             {'on_conflict':'profile_id,study_date'},'resolution=ignore-duplicates,return=representation')
-    if saved:return cm_without_graduated(saved[0]['payload'],graduated)
+    if saved:return cm_without_graduated(saved[0]['payload'],graduated,kuku_ready)
     # Another device won the save: display its stable card identities, rather than overwriting them.
     latest=cm_account_request('GET','/rest/v1/chokomana_daily_plans',params={
         'profile_id':'eq.'+profile,'study_date':'eq.'+today.isoformat(),'select':'payload','limit':'1'})
     if not latest:raise RuntimeError('plan save could not be confirmed')
-    return cm_without_graduated(latest[0]['payload'],graduated)
+    return cm_without_graduated(latest[0]['payload'],graduated,kuku_ready)
 
 
 def cm_minutes(ms):
@@ -2384,7 +2428,7 @@ def render_daily_plan(apps):
         if pending:
             st.caption('単元データ未登録：'+'・'.join(pending)+'。登録後、自動選定の対象になります。')
         with st.expander('選び方・時間の目安について'):
-            st.write('こくご・そろばん・ずけい・えいご・もじの5分野から、今日すでに学習した時間とメダルの傾向を使い、苦手な分野を多めにしながら、ほかの分野も含めて選びます。選べる単元が少ない教科は、他の教科で補います。')
+            st.write('こくご・そろばん・ずけい・えいごの4分野から、今日すでに学習した時間とメダルの傾向を使い、苦手な分野を多めにしながら、ほかの分野も含めて選びます。選べる単元が少ない教科は、他の教科で補います。')
             st.write('今日のリスト以外の自由な学習も含め、保存済みの全メダルを単元・難易度別に集計します。直近10回を中心に、金が2回連続、または直近3〜5回の金の割合が8割以上で最後も金なら次の単元を優先します。銀・銅・通常メダルが多い単元は、回数と教科の時間配分を増やします。文字の自己確認メダルは取り組みの記録として扱い、自動進級には使いません。')
             st.write('復習間隔は正答が続くと1→3→7→14→30日へ延ばし、つまずくと翌日に戻します。効果を保証する日数ではなく、成績に応じて調整する初期設定です。')
             st.write('年齢×10分はこのアプリの設定です。休憩は学習時間に含めず、まとめて続ける必要はありません。自動で組む予定は残り時間の95〜100％を目指し、同じ単元は1日3回を目安にします。1日の目安の95％に達すると予定の自動追加を止めますが、表示済みの課題は時間や回数にかかわらず開けます。')
