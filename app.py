@@ -395,9 +395,40 @@ def normalize_grade(value: object) -> str:
     return str(value) if value in GRADE_NAMES else "white"
 
 
+CM_SUPPORT_DEFS = [{'key': 'heart', 'emoji': '❤️', 'label': 'だいすき'}, {'key': 'clap', 'emoji': '👏', 'label': 'がんばった！'}, {'key': 'sparkle', 'emoji': '✨', 'label': 'すごい！'}, {'key': 'flower', 'emoji': '🌸', 'label': 'はなまる'}, {'key': 'thumb', 'emoji': '👍', 'label': 'いいね！'}, {'key': 'star', 'emoji': '⭐', 'label': 'きらり！'}, {'key': 'hug', 'emoji': '🫶', 'label': 'おうえんしてるよ'}, {'key': 'trophy', 'emoji': '🏆', 'label': 'やったね！'}, {'key': 'rocket', 'emoji': '🚀', 'label': 'いってみよう'}, {'key': 'sun', 'emoji': '☀️', 'label': 'にこにこ'}, {'key': 'train', 'emoji': '🚃', 'label': 'しゅっぱつ！'}, {'key': 'smile', 'emoji': '😊', 'label': 'うれしいよ'}, {'key': 'go', 'emoji': '💪', 'label': 'これをがんばろう！'}, {'key': 'well_done', 'emoji': '🎉', 'label': 'よくできた！'}, {'key': 'thankyou', 'emoji': '💐', 'label': 'ありがとう！'}, {'key': 'together', 'emoji': '🤝', 'label': 'いっしょにやろう'}, {'key': 'tryagain', 'emoji': '🌱', 'label': 'またやってみよう'}, {'key': 'great', 'emoji': '💮', 'label': 'たいへんよくできました'}]
+CM_SUPPORT_COLORS={'blue':'#3c6fab','rose':'#b65079','green':'#43814d','purple':'#8255ad','orange':'#bc6f20','teal':'#25898c'}
+
+def cm_support_rows(kind, keys):
+    profile=st.session_state.get('cm_profile');keys=sorted({str(k) for k in keys if k})
+    if not profile or not keys:return []
+    cache=st.session_state.setdefault('cm_support_cache',{});cache_key=(profile,kind,tuple(keys));cached=cache.get(cache_key)
+    if cached and time.time()-cached['at']<15:return cached['rows']
+    rows=[]
+    for offset in range(0,len(keys),40):
+        # Exact quoted values, escaped for PostgREST's in-expression grammar.
+        values=','.join('"'+k.replace('\\','\\\\').replace('"','\\"')+'"' for k in keys[offset:offset+40])
+        part=cm_account_request('GET','/rest/v1/cm_watch_encouragements',params={'profile_id':'eq.'+profile,'target_type':'eq.'+kind,'target_key':'in.('+values+')','select':'target_type,target_key,source_app,stamp_key,created_at,supporter:cm_watch_supporters(name,color)','order':'created_at.desc','limit':'1000'})
+        rows.extend(part or [])
+    if len(cache)>20:cache.clear()
+    cache[cache_key]={'at':time.time(),'rows':rows};return rows
+
+def cm_support_html(rows, key, source=None):
+    definitions={r['key']:r for r in CM_SUPPORT_DEFS};parts=[]
+    for row in rows:
+        if row.get('target_key')!=str(key) or (source and row.get('source_app')!=source):continue
+        d=definitions.get(row.get('stamp_key'));actor=row.get('supporter') or {}
+        if not d:continue
+        color=CM_SUPPORT_COLORS.get(actor.get('color'),'#43814d')
+        parts.append('<span class="cm-support" style="border-color:'+color+'"><b>'+html.escape(d['emoji'])+'</b> '+html.escape(d['label'])+' <small style="color:'+color+'">'+html.escape(str(actor.get('name') or 'おうちの人'))+'</small></span>')
+        if len(parts)>=8:break
+    if not parts:return ''
+    return '<style>.cm-support-strip{display:flex;flex-wrap:wrap;gap:5px;margin:7px 0}.cm-support{display:inline-flex;align-items:center;gap:3px;background:#fff;border:2px solid;border-radius:10px;padding:3px 6px;font-size:12px;line-height:1.35}.cm-support b{font-size:22px}.cm-support small{font-size:10px}</style>'+'<div class="cm-support-strip">'+''.join(parts)+'</div>'
+
 def stamp_grid_html(rows: list[dict]) -> str:
     """HTML stamp cards, HTML-escaped because Supabase columns are external data."""
     cards = []
+    try:support=cm_support_rows('attempt',[r.get('attempt_id') for r in rows])
+    except RuntimeError:support=[]
     for row in rows:
         grade = normalize_grade(row.get("grade"))
         stamp_char = html.escape(str(row.get("stamp_char") or "学")[:1])
@@ -416,6 +447,7 @@ def stamp_grid_html(rows: list[dict]) -> str:
             <div class="cm-stamp-category">{category}</div>
             <div class="cm-stamp-meta">{subj} · {score}問</div>
             <div class="cm-stamp-time">{when}</div>
+            {cm_support_html(support,row.get("attempt_id"),row.get("source_app"))}
           </article>''')
     return re.sub(r'>\s+<', '><', '<div class="cm-stamp-grid">' + ''.join(cards) + '</div>')
 
@@ -771,6 +803,10 @@ def home_cards_html(apps: list[dict]) -> str:
 
 
 def render_home(apps: list[dict]) -> None:
+    try:
+        general=cm_support_html(cm_support_rows('general',['general']),'general')
+        if general:st.markdown(general,unsafe_allow_html=True)
+    except RuntimeError:pass
     with st.container(key="cm_home_heading"):
         heading, settings_button = st.columns([5, 1], gap="small", vertical_alignment="center")
         with heading:
@@ -1327,7 +1363,7 @@ def render_settings():
 
 def cm_clear_account_state():
     for key in list(st.session_state):
-        if key.startswith(("cm_link_", "cm_today_", "cm_history_", "cm_plan_", "cm_email_", "cm_audio_", "cm_medal_volume_")) or key in (
+        if key.startswith(("cm_link_", "cm_today_", "cm_history_", "cm_plan_", "cm_email_", "cm_audio_", "cm_medal_volume_", "cm_support_")) or key in (
             "cm_profile", "cm_account_token", "cm_account_username", "cm_hub_validated_token",
             "cm_change_current", "cm_change_new", "cm_change_confirmation", "cm_password_changed"):
             st.session_state.pop(key, None)
@@ -2555,6 +2591,8 @@ def cm_minutes(ms):
 
 def cm_plan_items_html(items, links=None):
     links=links or {};parts=[];detail_parts=[]
+    try:support=cm_support_rows('plan',[i.get('plan_item_id') for i in items])
+    except RuntimeError:support=[]
     for n,item in enumerate(items,1):
         label=html.escape(str(item.get('label',item['menu_id'])))
         category=str(item.get('category_label',''));reason=html.escape(item['reason'])
@@ -2582,6 +2620,7 @@ def cm_plan_items_html(items, links=None):
             '<div class="cm-plan-heading"><span class="cm-plan-number">'+str(n)+'</span><span class="cm-plan-subject">'+subject+'</span></div>'+
             '<h3>'+label+'</h3><div class="cm-plan-info"><span class="cm-plan-time">約'+cm_minutes(item['duration_ms']*max(0,total-count))+'分</span><span class="cm-plan-progress" aria-label="'+str(count)+'／'+str(total)+'回 完了">'+progress+'</span></div>'+
             ('<div class="cm-plan-status">'+status+'</div>' if status else '')+
+            cm_support_html(support,item.get('plan_item_id'),item['source_app'])+
             '<div class="cm-plan-action">'+action+'</div>'+
             '</li>')
         detail_parts.append('<div class="cm-plan-detail"><strong>'+str(n)+'. '+source+' · '+label+'</strong><p>'+reason+' · '+basis+'</p><p>開き方：'+steps+'</p></div>')
