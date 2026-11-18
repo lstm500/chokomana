@@ -63,7 +63,7 @@ APP_DEFINITIONS = (
 
 # Local diagnostics: bounded timing/error metadata; never request bodies or credentials.
 CM_DIAG_LIMIT = 2000
-CM_DIAG_VERSION = 'operation-log-2-hub44'
+CM_DIAG_VERSION = 'operation-log-2-hub45'
 
 
 def cm_diag_state():
@@ -1295,10 +1295,9 @@ def render_settings():
         st.caption("直近2,000件を記録します。クリックから表示までは描画の目安です。学習アプリ内部の表示時間は含みません。")
     render_plan_age()
     render_medal_audio_settings()
-    render_email_settings()
     # Share the existing account card and widget styles in both browser themes.
     with st.container(border=True, key="cm_account_form"):
-        st.markdown("**パスワードを変更**")
+        st.markdown("**パスワード・メールアドレス**")
         st.caption("ユーザー名と学習記録はそのまま残ります。")
         with st.form("cm_password_change_form", clear_on_submit=False):
             current = st.text_input("現在のパスワード", type="password", max_chars=128,
@@ -1319,6 +1318,8 @@ def render_settings():
             except RuntimeError:
                 cm_error("変更結果を確認できませんでした。新しいパスワードでログインできるか確認してください。")
         st.caption("変更すると、ほかの端末のちょこまなでは再ログインが必要になります。")
+        st.divider()
+        render_email_settings(embedded=True)
     if cm_button("ホームへ戻る", key="cm_settings_home", use_container_width=True):
         st.session_state.cm_page = "home"
         st.rerun()
@@ -1489,8 +1490,8 @@ def cm_email_setup_hint():
         st.caption('StreamlitのSecretsに設定してください。TLS接続を使用します。465番ポートはSSL/TLS接続です。')
 
 
-def render_email_settings():
-    with st.container(border=True,key='cm_email_settings'):
+def render_email_settings(embedded=False):
+    with st.container(border=not embedded,key='cm_email_settings'):
         st.markdown('**パスワード復旧用メール**');st.caption('確認済みのメールアドレスで、パスワードを再設定できます。')
         try:
             rows=cm_account_request('GET','/rest/v1/chokomana_recovery_emails',params={'profile_id':'eq.'+st.session_state['cm_profile'],'select':'email','limit':'1'})
@@ -1499,7 +1500,7 @@ def render_email_settings():
         except RuntimeError:cm_error('登録情報を読み込めませんでした。');return
         cm_email_setup_hint()
         with st.form('cm_email_register_form',clear_on_submit=True):
-            address=st.text_input('復旧用メールアドレス',max_chars=254,key='cm_email_address')
+            address=st.text_input('復旧用メールアドレス',value=rows[0]['email'] if rows else '',max_chars=254,key='cm_email_address')
             password=st.text_input('現在のパスワード',type='password',max_chars=128,key='cm_email_current_password')
             send=cm_form_submit_button('確認コードを送る',disabled=not cm_email_configured(),use_container_width=True)
         if send:
