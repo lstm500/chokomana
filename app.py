@@ -407,7 +407,7 @@ def cm_support_rows(kind, keys):
     for offset in range(0,len(keys),40):
         # Exact quoted values, escaped for PostgREST's in-expression grammar.
         values=','.join('"'+k.replace('\\','\\\\').replace('"','\\"')+'"' for k in keys[offset:offset+40])
-        part=cm_account_request('GET','/rest/v1/cm_watch_encouragements',params={'profile_id':'eq.'+profile,'target_type':'eq.'+kind,'target_key':'in.('+values+')','select':'target_type,target_key,source_app,stamp_key,created_at,supporter:cm_watch_supporters(name,color)','order':'created_at.desc','limit':'1000'})
+        part=cm_account_request('GET','/rest/v1/cm_watch_encouragements',params={'profile_id':'eq.'+profile,'target_type':'eq.'+kind,'target_key':'in.('+values+')','select':'id,target_type,target_key,source_app,stamp_key,created_at,supporter:cm_watch_supporters(name,color)','order':'created_at.desc','limit':'1000'})
         rows.extend(part or [])
     if len(cache)>20:cache.clear()
     cache[cache_key]={'at':time.time(),'rows':rows};return rows
@@ -416,14 +416,16 @@ CM_STAMP_ART = {'heart': {'blue': '<svg xmlns="http://www.w3.org/2000/svg" viewB
 
 def cm_support_html(rows, key, source=None):
     parts=[]
-    for row in rows:
+    focus=(st.session_state.get('cm_receipt_focus') or {}).get('id')
+    for row in sorted(rows,key=lambda r:r.get('id')!=focus):
         if row.get('target_key')!=str(key) or (source and row.get('source_app')!=source):continue
         actor=row.get('supporter') or {};design=CM_STAMP_ART.get(row.get('stamp_key'),{})
         art=design.get(actor.get('color')) or design.get('green')
         if not art:continue
         name=html.escape(str(actor.get('name') or 'おうちの人'),quote=True)
         color=CM_SUPPORT_COLORS.get(actor.get('color'),'#43814d')
-        parts.append('<details class="cm-stamp-receipt"><summary style="border-color:'+color+'" aria-label="送信者を確認">'+art+'</summary><span class="cm-stamp-sender">'+name+'</span></details>')
+        anchor=cm_notice_anchor('stamp','',row['id']) if row.get('id') else ''
+        parts.append('<details id="'+anchor+'" class="cm-stamp-receipt"><summary style="border-color:'+color+'" aria-label="送信者を確認">'+art+'</summary><span class="cm-stamp-sender">'+name+'</span></details>')
         if len(parts)>=8:break
     if not parts:return ''
     return '<style>.cm-support-strip{display:flex;flex-wrap:wrap;gap:5px;margin:5px 0}.cm-stamp-receipt{display:inline-block;position:relative;flex:0 0 auto;margin:0!important;padding:0!important;border:0!important}.cm-stamp-receipt summary{display:flex!important;align-items:center;justify-content:center;list-style:none!important;width:40px;height:40px;min-height:40px!important;padding:3px!important;background:#fff;border:1.5px solid;border-radius:10px;cursor:pointer}.cm-stamp-receipt summary::marker{content:""}.cm-stamp-receipt summary::-webkit-details-marker{display:none}.cm-stamp-receipt .cm-stamp-icon{display:block;width:32px;height:32px}.cm-stamp-receipt .cm-stamp-sender{position:absolute;left:0;top:44px;z-index:30;background:#fff;color:#24344e;border:1px solid #c7d4d4;border-radius:8px;padding:5px 8px;font-size:14px;line-height:1.5;white-space:nowrap;box-shadow:0 2px 8px #0002}.cm-stamp-receipt:not([open])>.cm-stamp-sender{display:none}</style><div class="cm-support-strip">'+''.join(parts)+'</div>'
@@ -442,7 +444,7 @@ def stamp_grid_html(rows: list[dict]) -> str:
         score = f"{safe_int(row.get('correct_count'))} / {safe_int(row.get('total_count'))}"
         when = html.escape(jst_time(row.get("finished_at")))
         cards.append(f'''
-          <article class="cm-stamp-item">
+          <article id="{cm_notice_anchor('attempt',row.get('source_app'),row.get('attempt_id'))}" class="cm-stamp-item">
             <div class="cm-stamp {grade}" aria-label="{GRADE_NAMES[grade]}スタンプ {stamp_char}">
               <span class="cm-grade">{GRADE_NAMES[grade]}</span>
               <span class="cm-stamp-char">{stamp_char}</span>
@@ -677,21 +679,137 @@ def cm_receipts(force=False):
 def cm_open_receipts(kind):
     st.session_state['cm_receipt_kind']=kind;st.session_state['cm_page']='inbox';st.rerun()
 
+CM_NOTICE_FRONTEND = '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>\nhtml,body{margin:0;padding:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,\'Noto Sans JP\',sans-serif;color:#c8192c;font-size:15px}#notices:empty{display:none}.heading{margin:0 0 4px;color:#c8192c;font-size:16px;font-weight:750;line-height:1.5}.notice{display:flex;gap:8px;align-items:center;max-width:100%;border:0;background:transparent;color:#c8192c;padding:4px 0;cursor:pointer;text-align:left;font:inherit;line-height:1.5;min-height:42px}.notice:hover .destination,.notice:focus-visible .destination{text-decoration:underline}.notice:focus-visible{outline:2px solid #ca4856;outline-offset:2px}.stamp{display:flex;align-items:center;justify-content:center;flex:0 0 38px;width:38px;height:38px;background:white;border:1.5px solid;border-radius:10px;box-sizing:border-box}.cm-stamp-icon{display:block;width:30px;height:30px}.destination{font-size:14px;overflow-wrap:anywhere}.place{font-weight:700}.voice{font-weight:750;font-size:15px}summary{cursor:pointer;color:#c8192c;padding:4px 0;font-size:14px}.jump-message{font-size:13px;color:#8b4b25;margin:0}.fallback{color:#c8192c}\n</style></head><body><div id="notices" role="region" aria-label="新しいお知らせ"></div><script>\nlet args={},jumpFinished=\'\',observer=null;\nconst send=value=>parent.postMessage({isStreamlitMessage:true,type:\'streamlit:setComponentValue\',value},\'*\');\nconst size=()=>parent.postMessage({isStreamlitMessage:true,type:\'streamlit:setFrameHeight\',height:Math.max(0,Math.ceil(document.body.scrollHeight))},\'*\');\nconst id=()=>crypto.randomUUID?crypto.randomUUID():String(Date.now())+\'-\'+Math.random();\nfunction select(item){send({type:\'select\',receipt_id:item.id,nonce:id()})}\nfunction row(item){const button=document.createElement(\'button\');button.type=\'button\';button.className=\'notice\';button.setAttribute(\'aria-label\',item.destination+\'に届いたスタンプを見る\');const picture=document.createElement(\'span\');picture.className=\'stamp\';picture.style.borderColor=item.color;picture.innerHTML=item.art;const label=document.createElement(\'span\');label.className=\'destination\';label.textContent=item.destination;button.append(picture,label);button.onclick=()=>select(item);return button}\nfunction render(){\n const host=document.getElementById(\'notices\');host.replaceChildren();\n if(args.mode===\'jump\'){jump();return}if(observer)observer.disconnect();\n const rows=args.rows||[];\n if(rows.length){const heading=document.createElement(\'p\');heading.className=\'heading\';heading.textContent=\'スタンプが届いたよ！ \'+rows.length+\'件\';host.append(heading);for(const item of rows.slice(0,3))host.append(row(item));if(rows.length>3){const details=document.createElement(\'details\'),summary=document.createElement(\'summary\');summary.textContent=\'ほかのスタンプ \'+(rows.length-3)+\'件\';details.append(summary,...rows.slice(3).map(row));details.ontoggle=size;host.append(details)}}\n if(args.voice_count){const b=document.createElement(\'button\');b.type=\'button\';b.className=\'notice voice\';b.textContent=\'メッセージが届いたよ！ \'+args.voice_count+\'件\';b.onclick=()=>send({type:\'voice\',nonce:id()});host.append(b)}size();\n}\nfunction jump(){\n const spec=args.jump;if(!spec||jumpFinished===spec.nonce){size();return}\n let doc;try{doc=parent.document}catch(e){const a=document.createElement(\'a\');a.className=\'fallback\';a.href=\'#\'+encodeURIComponent(spec.anchor);a.target=\'_parent\';a.textContent=\'届いた場所へ移動する\';document.getElementById(\'notices\').append(a);size();return}\n let attempts=0;\n function find(){\n  if(jumpFinished===spec.nonce)return;\n  // Prefer the exact received stamp, then its task or medal card.\n  const stamp=doc.getElementById(spec.stamp_anchor),target=stamp&&doc.getElementById(spec.anchor)?stamp:null;\n  if(target){\n   target.scrollIntoView({block:\'center\',inline:\'nearest\',behavior:\'auto\'});target.classList.add(\'cm-notice-highlight\');\n   const box=target.getBoundingClientRect(),height=doc.defaultView.innerHeight;\n   if(box.bottom>0&&box.top<height){jumpFinished=spec.nonce;if(observer)observer.disconnect();send({type:\'arrived\',receipt_id:spec.receipt_id,anchor:spec.anchor,nonce:spec.nonce});return}\n  }\n  if(++attempts<100)setTimeout(find,100);\n  else{const p=document.createElement(\'p\');p.className=\'jump-message\';p.textContent=\'届いた場所をまだ表示できません。通知は残しています。\';document.getElementById(\'notices\').append(p);size()}\n }\n observer=new MutationObserver(()=>{if(attempts<100)find()});observer.observe(doc.body,{childList:true,subtree:true});find();size();\n}\nwindow.addEventListener(\'message\',event=>{if(event.source!==parent||event.data?.type!==\'streamlit:render\')return;args=event.data.args||{};render()});\nif(\'ResizeObserver\' in window)new ResizeObserver(size).observe(document.body);\nparent.postMessage({isStreamlitMessage:true,type:\'streamlit:componentReady\',apiVersion:1},\'*\');size();\n</script></body></html>\n'
+
+def cm_notice_anchor(kind, source, key):
+    return 'cm-notice-'+hashlib.sha256((str(kind)+'|'+str(source)+'|'+str(key)).encode()).hexdigest()[:22]
+
+def cm_notice_plain(value):
+    return re.sub(r'\[\[([^|\]]+)\|[^\]]+\]\]',r'\1',str(value or ''))
+
+def cm_notice_plan_items():
+    profile=st.session_state.get('cm_profile');day=now_jst().date().isoformat()
+    cached=st.session_state.get('cm_plan_snapshot') or {};key=cached.get('key') or ()
+    if len(key)>1 and key[0]==profile and key[1]==day:return cached.get('payload',{}).get('items',[])
+    cached=st.session_state.get('cm_receipt_plan')
+    if cached and cached['profile']==profile and cached['day']==day and time.time()-cached['at']<10:return cached['items']
+    rows=cm_account_request('GET','/rest/v1/chokomana_daily_plans',params={'profile_id':'eq.'+str(profile),'study_date':'eq.'+day,'select':'payload','limit':'1'}) or []
+    items=(rows[0].get('payload') or {}).get('items',[]) if rows else []
+    st.session_state['cm_receipt_plan']={'profile':profile,'day':day,'at':time.time(),'items':items};return items
+
+def cm_notice_metadata(rows):
+    profile=st.session_state.get('cm_profile');signature=(profile,tuple(sorted((r['id'],r.get('target_type'),r.get('target_key')) for r in rows)))
+    cached=st.session_state.get('cm_receipt_metadata')
+    if cached and cached['key']==signature and time.time()-cached['at']<60:return cached['data']
+    data={'catalog':{},'attempts':{}}
+    def quoted(values):return 'in.('+','.join('"'+str(k).replace('\\','\\\\').replace('"','\\"')+'"' for k in values)+')'
+    for kind in ('catalog','attempts'):
+        keys=sorted({r.get('target_key') for r in rows if r.get('target_key') and (r.get('target_type') in ('menu','question') if kind=='catalog' else r.get('target_type')=='attempt')})
+        for offset in range(0,len(keys),40):
+            table='chokomana_learning_catalog' if kind=='catalog' else 'chokomana_stamps'
+            params={'select':'source_app,entry_id,entry_type,payload,published_at' if kind=='catalog' else 'source_app,attempt_id,category_label,finished_at','limit':'1000'}
+            params['entry_id' if kind=='catalog' else 'attempt_id']=quoted(keys[offset:offset+40])
+            if kind=='catalog':params.update(entry_type='in.(menu,question)',order='published_at.asc')
+            else:params['profile_id']='eq.'+str(profile)
+            found=cm_account_request('GET','/rest/v1/'+table,params=params) or []
+            for r in found:data[kind][(r['source_app'],r['entry_id' if kind=='catalog' else 'attempt_id'])]=r
+    st.session_state['cm_receipt_metadata']={'key':signature,'at':time.time(),'data':data};return data
+
+def cm_notice_destination(row, items, metadata):
+    source=row.get('source_app') or 'hub';kind=row.get('target_type');key=row.get('target_key');subject=SUBJECT_NAMES.get(source,'あなたへの応援')
+    entry=metadata.get('catalog',{}).get((source,key),{}).get('payload') or {}
+    menus=entry.get('menu_ids') or ([key] if kind=='menu' else [])
+    matches=[]
+    for i in items:
+        if i.get('source_app')!=source:continue
+        attempts=i.get('completed_attempts',[])+[m.get('attempt_id') for m in i.get('medals',[])]
+        if (kind=='plan' and i.get('plan_item_id')==key) or (kind=='attempt' and key in attempts) or (kind in ('menu','question') and i.get('menu_id') in menus):matches.append(i)
+    if matches:
+        # Prefer an unfinished task when the same unit appears more than once.
+        item=sorted(matches,key=lambda x:bool(x.get('done')))[0]
+        label=cm_notice_plain(item.get('label') or item.get('menu_id'))
+        return {'page':'home','place':'plan','anchor':cm_notice_anchor('plan',source,item['plan_item_id']),'plan_item_id':item['plan_item_id'],'destination':'きょうやること：'+subject+'・'+label,'label':label,'priority':0}
+    if kind=='general':return {'page':'home','place':'general','anchor':'cm-general-support','destination':'ホーム：あなたへの応援','label':'あなたへの応援','priority':2}
+    attempt=metadata.get('attempts',{}).get((source,key)) or {}
+    if kind=='attempt' and attempt.get('finished_at'):
+        try:
+            d=datetime.fromisoformat(attempt['finished_at'].replace('Z','+00:00')).astimezone(TOKYO).date()
+            place='今日の成果' if d==now_jst().date() else d.strftime('%m月%d日')+'の成果'
+            label=cm_notice_plain(attempt.get('category_label') or '獲得したメダル')
+            return {'page':'today' if d==now_jst().date() else 'history','place':'attempt','anchor':cm_notice_anchor('attempt',source,key),'study_date':d.isoformat(),'destination':place+'：'+subject+'・'+label,'label':label,'priority':1}
+        except (ValueError,TypeError):pass
+    label=cm_notice_plain(entry.get('label') or (entry.get('snapshot') or {}).get('prompt') or {'plan':'きょうやることの課題','menu':'単元','question':'問題','attempt':'獲得したメダル'}.get(kind,'応援'))
+    return {'page':'inbox','place':'inbox','anchor':cm_notice_anchor('stamp','',row['id']),'destination':'おうえん一覧：'+subject+'・'+label,'label':label,'priority':3}
+
+def cm_notice_rows(data):
+    rows=[r for r in data.get('encouragements',[]) if not r.get('read_at')]
+    items=cm_notice_plan_items() if rows else [];metadata=cm_notice_metadata(rows) if rows else {'catalog':{},'attempts':{}}
+    result=[]
+    for r in rows:
+        actor=r.get('supporter') or {};color=actor.get('color','green');design=CM_STAMP_ART.get(r.get('stamp_key'),CM_STAMP_ART['flower'])
+        result.append({'id':r['id'],'art':design.get(color) or design['green'],'color':CM_SUPPORT_COLORS.get(color,'#43814d'),**cm_notice_destination(r,items,metadata),'created_at':r.get('created_at','')})
+    result.sort(key=lambda r:r['created_at'],reverse=True);result.sort(key=lambda r:r['priority'])
+    for r in data.get('messages',[]):
+        if r.get('sender')=='parent' and r.get('kind')=='stamp' and not r.get('read_at'):
+            result.append({'id':r['id'],'legacy':True,'art':CM_STAMP_ART['flower']['green'],'color':'#43814d','page':'inbox','place':'inbox','anchor':cm_notice_anchor('legacy','',r['id']),'destination':'おうえん一覧：あなたへの応援','priority':3})
+    return result
+
+def cm_notice_select(row):
+    profile=st.session_state.get('cm_profile');nonce=str(uuid4())
+    jump={**row,'receipt_id':row['id'],'profile':profile,'nonce':nonce,'stamp_anchor':cm_notice_anchor('legacy' if row.get('legacy') else 'stamp','',row['id'])}
+    st.session_state['cm_receipt_jump']=jump;st.session_state['cm_receipt_focus']={'anchor':row['anchor'],'id':row['id'],'destination':row['destination'],'at':time.time()}
+    st.session_state.pop('cm_support_cache',None)
+    page=row['page']
+    if page=='today':_open_today()
+    elif page=='history':
+        d=date.fromisoformat(row['study_date']);st.session_state['cm_history_picker']=d;st.session_state['cm_history_requested_for']=d;st.session_state['cm_history_loaded_for']=None;st.session_state['cm_page']='history'
+    else:st.session_state['cm_page']=page
+    if page=='inbox':st.session_state['cm_receipt_kind']='stamp'
+    st.rerun()
+
+def cm_notice_ack(event):
+    jump=st.session_state.get('cm_receipt_jump')
+    if not jump or jump.get('profile')!=st.session_state.get('cm_profile') or not isinstance(event,dict):return False
+    if event.get('type')!='arrived' or event.get('nonce')!=jump['nonce'] or event.get('receipt_id')!=jump['receipt_id'] or event.get('anchor')!=jump['anchor']:return False
+    cm_watch_request('child_read' if jump.get('legacy') else 'child_stamp_read',id=jump['receipt_id'])
+    st.session_state.pop('cm_receipt_jump',None);st.session_state.pop('cm_receipt_cache',None)
+    return True
+
+def cm_receipt_jump_ui():
+    jump=st.session_state.get('cm_receipt_jump')
+    if not jump or jump.get('profile')!=st.session_state.get('cm_profile'):return
+    safe={k:jump[k] for k in ('anchor','stamp_anchor','nonce','receipt_id')}
+    event=cm_auth_component(CM_NOTICE_FRONTEND)(mode='jump',jump=safe,key='cm_receipt_jump_'+jump['nonce'],default=None)
+    try:
+        if cm_notice_ack(event):st.rerun()
+    except RuntimeError:st.caption('移動しましたが、既読の保存を確認できません。通知は残しています。')
+
 def cm_receipt_notice():
     @st.fragment(run_every=10)
     def notice():
-        try:data=cm_receipts()
+        try:data=cm_receipts();rows=cm_notice_rows(data)
         except RuntimeError:
             st.caption('おたよりを確認できません。ホームを更新すると再試行します。');return
-        stamps=[r for r in data.get('encouragements',[]) if not r.get('read_at')]
-        legacy=[r for r in data.get('messages',[]) if r.get('sender')=='parent' and r.get('kind')=='stamp' and not r.get('read_at')]
-        messages=[r for r in data.get('messages',[]) if r.get('sender')=='parent' and r.get('kind')=='voice' and not r.get('read_at')]
-        with st.container(key='cm_receipt_notice'):
-            if stamps or legacy:
-                if cm_button(f'スタンプが届いたよ！　{len(stamps)+len(legacy)}件 →',key='cm_new_stamps',use_container_width=True):cm_open_receipts('stamp')
-            if messages:
-                if cm_button(f'メッセージが届いたよ！　{len(messages)}件 →',key='cm_new_messages',use_container_width=True):cm_open_receipts('voice')
+        voices=sum(1 for r in data.get('messages',[]) if r.get('sender')=='parent' and r.get('kind')=='voice' and not r.get('read_at'))
+        event=cm_auth_component(CM_NOTICE_FRONTEND)(mode='notice',rows=[{k:r[k] for k in ('id','art','color','destination')} for r in rows],voice_count=voices,key='cm_receipt_notice_component',default=None)
+        if not isinstance(event,dict) or event.get('nonce')==st.session_state.get('cm_receipt_last_command'):return
+        st.session_state['cm_receipt_last_command']=event.get('nonce')
+        if event.get('type')=='voice':cm_open_receipts('voice')
+        elif event.get('type')=='select':
+            row=next((r for r in rows if r['id']==event.get('receipt_id')),None)
+            if row:cm_notice_select(row)
     notice()
+
+def cm_notice_question_support(items):
+    data=(st.session_state.get('cm_receipt_cache') or {}).get('data') or {}
+    rows=[r for r in data.get('encouragements',[]) if r.get('target_type')=='question']
+    if not rows:return []
+    metadata=cm_notice_metadata(rows);result=[]
+    for row in rows:
+        destination=cm_notice_destination(row,items,metadata)
+        if destination['place']=='plan':result.append({**row,'target_key':destination['plan_item_id']})
+    return result
+
 
 def cm_receipt_stamp_html(row):
     return cm_support_html([dict(row,target_key='receipt')],'receipt')
@@ -718,11 +836,13 @@ def render_receipts():
         for row in data.get('messages',[]):
             if row.get('sender')!='parent' or row.get('kind')!='stamp':continue
             with st.container(border=True):
+                st.markdown('<span id="'+cm_notice_anchor('legacy','',row['id'])+'"></span>',unsafe_allow_html=True)
                 definition=next((d for d in CM_SUPPORT_DEFS if row.get('stamp') in (d['key'],d['label'])),{'key':'flower'})
                 st.markdown(cm_support_html([{'target_key':'legacy','stamp_key':definition['key'],'supporter':{'name':'送信者の記録なし','color':'green'}}],'legacy'),unsafe_allow_html=True)
                 if not row.get('read_at') and cm_button('みたよ！',key='cm_receipt_legacy_'+row['id']):
                     try:cm_watch_request('child_read',id=row['id']);st.session_state.pop('cm_receipt_cache',None);st.rerun()
                     except RuntimeError as exc:st.error(str(exc))
+        if (st.session_state.get('cm_receipt_jump') or {}).get('place')=='inbox':cm_receipt_jump_ui()
         return
     messages=[m for m in data.get('messages',[]) if m.get('sender')=='parent' and m.get('kind')=='voice']
     if not messages:st.info('まだメッセージはありません。')
@@ -911,7 +1031,7 @@ def home_cards_html(apps: list[dict]) -> str:
 def render_home(apps: list[dict]) -> None:
     try:
         general=cm_support_html(cm_support_rows('general',['general']),'general')
-        if general:st.markdown(general,unsafe_allow_html=True)
+        if general:st.markdown('<div id="cm-general-support">'+general+'</div>',unsafe_allow_html=True)
     except RuntimeError:pass
     with st.container(key="cm_home_heading"):
         heading, settings_button = st.columns([5, 1], gap="small", vertical_alignment="center")
@@ -937,6 +1057,8 @@ def render_home(apps: list[dict]) -> None:
             _open_today()
             st.rerun()
     st.caption("学習アプリは別のタブで開きます。")
+
+    if (st.session_state.get('cm_receipt_jump') or {}).get('place')=='general':cm_receipt_jump_ui()
 
 
 def render_stamp_book(rows: list[dict], target_day: date, truncated: bool) -> None:
@@ -972,6 +1094,8 @@ def render_stamp_book(rows: list[dict], target_day: date, truncated: bool) -> No
             "スタンプ": GRADE_NAMES[normalize_grade(r.get("grade"))] + str(r.get("stamp_char") or "学"),
         } for r in rows]
         st.dataframe(details, hide_index=True, use_container_width=True)
+
+    if (st.session_state.get('cm_receipt_jump') or {}).get('place')=='attempt':cm_receipt_jump_ui()
 
 
 def render_today(url: str, key: str, profile: str, missing: list[str]) -> None:
@@ -1045,7 +1169,7 @@ def main() -> None:
     st.set_page_config(page_title="ちょこまな | まなびのホーム", page_icon="📚",
                        layout="wide", initial_sidebar_state="collapsed")
     st.markdown(STYLES, unsafe_allow_html=True)
-    st.markdown('<style>.st-key-cm_receipt_notice button{color:#c42032!important;font-weight:800!important;border-color:#e7a5ab!important;background:#fff4f4!important}.cm-plan-item .cm-support-strip{gap:4px;margin:4px 0}.cm-plan-item .cm-support{max-width:100%;font-size:11px;padding:3px 5px;overflow-wrap:anywhere}.cm-plan-item .cm-support b{font-size:19px}</style>',unsafe_allow_html=True)
+    st.markdown('<style>.cm-notice-highlight{outline:3px solid #edba4c!important;outline-offset:4px;scroll-margin-top:80px}.st-key-cm_receipt_notice button{color:#c42032!important;font-weight:800!important;border-color:#e7a5ab!important;background:#fff4f4!important}.cm-plan-item .cm-support-strip{gap:4px;margin:4px 0}.cm-plan-item .cm-support{max-width:100%;font-size:11px;padding:3px 5px;overflow-wrap:anywhere}.cm-plan-item .cm-support b{font-size:19px}</style>',unsafe_allow_html=True)
     if "cm_page" not in st.session_state:
         st.session_state.cm_page = "home"
     if "cm_jst_day" not in st.session_state:
@@ -2707,6 +2831,8 @@ def cm_plan_items_html(items, links=None):
         menu_support=cm_support_rows('menu',[i.get('menu_id') for i in items])
         attempt_support=cm_support_rows('attempt',[a for i in items for a in i.get('completed_attempts',[]) if isinstance(a,str)])
     except RuntimeError:support=[];menu_support=[];attempt_support=[]
+    try:question_support=cm_notice_question_support(items)
+    except RuntimeError:question_support=[]
     for n,item in enumerate(items,1):
         label=html.escape(str(item.get('label',item['menu_id'])))
         category=str(item.get('category_label',''));reason=html.escape(item['reason'])
@@ -2730,12 +2856,13 @@ def cm_plan_items_html(items, links=None):
         if count and len(item.get('medals',[]))<count and 'challenge' in item.get('mode_options',[]):
             medals+='<span class="cm-plan-medal-pending">メダル反映待ち</span>'
         status=badge+('<div class="cm-plan-earned">'+medals+'</div>' if medals else '')
-        parts.append('<li class="cm-plan-item cm-plan-source-'+html.escape(item['source_app'],quote=True)+(' cm-plan-done' if done else '')+'">'+
+        parts.append('<li id="'+cm_notice_anchor('plan',item['source_app'],item['plan_item_id'])+'" class="cm-plan-item cm-plan-source-'+html.escape(item['source_app'],quote=True)+(' cm-plan-done' if done else '')+'">'+
             '<div class="cm-plan-heading"><span class="cm-plan-number">'+str(n)+'</span><span class="cm-plan-subject">'+subject+'</span></div>'+
             '<h3>'+label+'</h3><div class="cm-plan-info"><span class="cm-plan-time">約'+cm_minutes(item['duration_ms']*max(0,total-count))+'分</span><span class="cm-plan-progress" aria-label="'+str(count)+'／'+str(total)+'回 完了">'+progress+'</span></div>'+
             ('<div class="cm-plan-status">'+status+'</div>' if status else '')+
             cm_support_html(support,item.get('plan_item_id'),item['source_app'])+
             cm_support_html(menu_support,item.get('menu_id'),item['source_app'])+
+            cm_support_html(question_support,item.get('plan_item_id'),item['source_app'])+
             ''.join(cm_support_html(attempt_support,a,item['source_app']) for a in item.get('completed_attempts',[]) if isinstance(a,str))+
             '<div class="cm-plan-action">'+action+'</div>'+
             '</li>')
@@ -2802,6 +2929,8 @@ def render_daily_plan(apps):
             st.write('年齢×10分はこのアプリの設定です。休憩は学習時間に含めず、まとめて続ける必要はありません。自動で組む予定は残り時間の95〜100％を目指し、同じ単元は1日3回を目安にします。1日の目安の95％に達すると予定の自動追加を止めますが、表示済みの課題は時間や回数にかかわらず開けます。')
             st.write('所要時間は保証値ではありません。同じ条件の完了記録が3回以上そろうと直近10回までの実測中央値を使い、それまでは仮の目安を表示します。')
             st.caption('学習ログから判定する適応型モデルです。生成AIへのデータ送信やAPIの追加料金はありません。画面外での助力や内面の理解は断定しません。')
+
+    if (st.session_state.get('cm_receipt_jump') or {}).get('place')=='plan':cm_receipt_jump_ui()
 
 
 def cm_diag_html():
