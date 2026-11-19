@@ -755,6 +755,7 @@ def cm_notice_rows(data):
     return result
 
 def cm_notice_select(row):
+    from uuid import uuid4
     profile=st.session_state.get('cm_profile');nonce=str(uuid4())
     jump={**row,'receipt_id':row['id'],'profile':profile,'nonce':nonce,'stamp_anchor':cm_notice_anchor('legacy' if row.get('legacy') else 'stamp','',row['id'])}
     st.session_state['cm_receipt_jump']=jump;st.session_state['cm_receipt_focus']={'anchor':row['anchor'],'id':row['id'],'destination':row['destination'],'at':time.time()}
