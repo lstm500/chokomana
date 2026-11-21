@@ -1019,6 +1019,18 @@ CM_TRAIN_SYMBOLS = {
         "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"
     ]
 }
+CM_TRAIN_DETAILS = {'yamanote/e231-500-01': ('山手線（路線名表示）', '白い前面・ウグイス帯'),
+ 'yamanote/e235-01': ('山手線（路線名表示）', 'ウグイス色ドア'),
+ 'chuo_rapid/201-01': ('快速 東京行き', '黒い前面・オレンジ塗装'),
+ 'chuo_rapid/e233-t-01': ('快速 東京行き', 'T編成・貫通編成'),
+ 'chuo_sobu/e231-0-01': ('各駅停車 三鷹行き', '銀色の前面・黄色帯'),
+ 'chuo_sobu/e231-500-01': ('各駅停車 三鷹行き', '白い前面・黄色帯'),
+ 'keihin_tohoku/209-01': ('大宮行き', '白い前面・水色帯'),
+ 'keihin_tohoku/e233-1000-01': ('各駅停車 大宮行き', '大型前面窓・水色帯'),
+ 'shonan_shinjuku/e231-1000-01': ('普通 宇都宮行き', '湘南色'),
+ 'shonan_shinjuku/e233-3000-01': ('普通 宇都宮行き', '前面下部表示器・湘南色'),
+ 'sotetsu/12000-01': ('各停 新宿行き', 'ネイビーブルー・JR直通対応'),
+ 'sotetsu/20000-01': ('特急 湘南台行き', 'ネイビーブルー・東急東横線直通対応')}
 CM_TRAIN_REPRESENTATIVES = {
     "yamanote": "yamanote/e235-01",
     "chuo_rapid": "chuo_rapid/e233-t-01",
@@ -1075,22 +1087,69 @@ CM_TRAIN_STYLE = """<style>
   100%{transform:translateY(0)}
 }
 @keyframes cm-train-loop{from{transform:translateY(var(--start))}to{transform:translateY(0)}}
-@keyframes cm-train-show{from{visibility:hidden}to{visibility:visible}}
-@keyframes cm-train-hide{from{visibility:visible}to{visibility:hidden}}
+@keyframes cm-train-show{from{opacity:0;visibility:hidden}to{opacity:1;visibility:visible}}
+@keyframes cm-train-hide{from{opacity:1;visibility:visible}to{opacity:0;visibility:hidden}}
 @keyframes cm-train-highlight{
   from{background:#ecf4f7;border-color:#7091a4;box-shadow:none}
   to{background:#fff1b6;border-color:#ca8a16;box-shadow:inset 0 0 0 1px #d6a336}
 }
 .cm-train-result{text-align:center;color:#f4f8fc;font-size:clamp(.82rem,3.4vw,1rem);font-weight:750;margin-top:9px}
-.cm-train-collection{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:8px}
-.cm-train-card{display:grid;grid-template-rows:56px auto auto;justify-items:center;align-items:center;
-  padding:8px 5px;border:1px solid #aac5d5;border-radius:12px;background:#eef5f8;color:#17344f;
-  text-align:center;font-size:.78rem;line-height:1.25;min-width:0}
-.cm-train-card strong{font-size:.81rem}
-.cm-train-card span{margin-top:4px;color:#284e69}
+.cm-train-prize{
+  position:fixed;z-index:10000;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:min(26rem,calc(100% - 2rem));box-sizing:border-box;padding:20px 14px 64px;
+  text-align:center;color:#17344f;background:#fff9df;border:3px solid #c48d19;
+  border-radius:22px;box-shadow:0 9px 35px #1e293b50,0 0 0 150vmax #09192990;
+}
+.cm-train-prize::before{content:"";position:absolute;inset:-150vmax;z-index:-1}
+.cm-train-prize:not([open]){display:none}
+.cm-train-prize[open]{animation:cm-train-prize-in 180ms ease-out var(--finish) both}
+@keyframes cm-train-prize-in{
+  from{opacity:0;visibility:hidden}to{opacity:1;visibility:visible}
+}
+.cm-train-prize-summary{
+  position:absolute;bottom:12px;left:50%;transform:translateX(-50%);width:min(12rem,80%);
+  padding:10px 12px;background:#18466b;color:white;font-weight:750;cursor:pointer;
+  border-radius:12px;list-style:none
+}
+.cm-train-prize-summary::-webkit-details-marker,.cm-train-card summary::-webkit-details-marker{
+  display:none
+}
+.cm-train-prize-summary:focus-visible,.cm-train-card summary:focus-visible{
+  outline:3px solid #2383c8;outline-offset:3px
+}
+.cm-train-prize-headline{font-size:clamp(1.05rem,4.6vw,1.35rem);font-weight:850}
+.cm-train-prize-image{
+  display:block;width:min(12rem,50vw,36vh);height:auto;aspect-ratio:1;object-fit:contain;
+  margin:0 auto
+}
+.cm-train-prize-name{font-size:clamp(1rem,4.1vw,1.28rem);font-weight:800}
+.cm-train-prize-series{font-size:.95rem;margin-top:1px}
+.cm-train-collection{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;align-items:start
+}
+.cm-train-card{border:1px solid #aac5d5;border-radius:12px;background:#eef5f8;color:#17344f;
+  text-align:center;line-height:1.3;min-width:0}
+.cm-train-card summary{display:grid;justify-items:center;gap:3px;padding:8px;
+  border-radius:12px;list-style:none;cursor:pointer}
+.cm-train-card-art{display:block;width:min(100%,104px);aspect-ratio:1;object-fit:contain}
+.cm-train-card strong{font-size:.9rem}
+.cm-train-card-summary{color:#284e69;font-size:.82rem}
+.cm-train-card-more{font-size:.76rem;color:#275d85;text-decoration:underline}
+.cm-train-card[open] .cm-train-card-art,.cm-train-card[open] .cm-train-card-more{display:none}
+.cm-train-card-detail{padding:0 8px 12px}
+.cm-train-card-large{display:block;width:min(100%,180px);aspect-ratio:1;
+  object-fit:contain;margin:0 auto 4px}
+.cm-train-destination{font-size:.9rem;font-weight:750}
+.cm-train-feature{font-size:.78rem;color:#284e69;margin-top:4px}
+.cm-train-count-before,.cm-train-empty-before{display:none}
+.stApp:has(.cm-train-prize[open]) .cm-train-card-new,
+.stApp:has(.cm-train-prize[open]) .cm-train-count-after{display:none}
+.stApp:has(.cm-train-prize[open]) .cm-train-count-before{display:inline}
+.stApp:has(.cm-train-prize[open]) .cm-train-empty-before{display:block}
 @media(prefers-reduced-motion:reduce){
   .cm-train-reveal .cm-train-track,.cm-train-spinning .cm-train-track,
-  .cm-train-reveal .cm-train-match .cm-train-face,.cm-train-reveal .cm-train-message{animation:none}
+  .cm-train-reveal .cm-train-match .cm-train-face,.cm-train-reveal .cm-train-message,
+  .cm-train-prize[open]{animation:none}
   .cm-train-reveal .cm-train-spin-note{display:none}
 }
 </style>"""
@@ -1120,20 +1179,35 @@ def cm_train_reel_cell(train=None, *, matched=False, decorative=False):
     return f'<div class="cm-train-cell{state}">{face}</div>'
 
 
+def cm_train_prize_popup(train):
+    line, series, artwork = CM_TRAIN_SYMBOLS[train]
+    return (
+        '<details class="cm-train-prize" open="open">'
+        '<summary class="cm-train-prize-summary">とじる</summary>'
+        '<div role="status" aria-live="polite">'
+        '<div class="cm-train-prize-headline">このメダルが あたったよ！</div>'
+        f'<img class="cm-train-prize-image" src="data:image/webp;base64,{artwork}" alt="" />'
+        f'<div class="cm-train-prize-name">{html.escape(line)}</div>'
+        f'<div class="cm-train-prize-series">{html.escape(series)}</div>'
+        '</div></details>'
+    )
+
+
 def cm_train_board(result, animate=False, *, spinning=False):
     board = (result or {}).get("board") or []
     complete = len(board) == 9
     animate = animate and complete
     winning = set()
+    prize = result.get("prize_train") if complete else None
     if complete:
         winning = {index - 1 for line in result.get("winning_lines", ()) for index in CM_TRAIN_LINES.get(line, ())}
-        awarded = CM_TRAIN_REPRESENTATIVES.get(str(result.get("prize_train") or "").partition("/")[0])
+        awarded = CM_TRAIN_REPRESENTATIVES.get(str(prize or "").partition("/")[0])
         grade = GRADE_NAMES[result["grade"]]
         if awarded:
             name = html.escape(CM_TRAIN_SYMBOLS[awarded][0])
-            message = f"{grade}メダルで あたり！ {name}"
-        elif result.get("prize_train"):
-            message = f"{grade}メダルで あたり！ 電車メダルをゲット"
+            message = f"{grade}メダルで 当たり！ {name}"
+        elif prize:
+            message = f"{grade}メダルで 当たり！ 電車メダルをゲット"
         else:
             message = f"{grade}メダルで ざんねん。つぎは そろうかな？"
     else:
@@ -1164,26 +1238,49 @@ def cm_train_board(result, animate=False, *, spinning=False):
     ) if complete or spinning else ""
     motion = " cm-train-reveal" if animate else " cm-train-spinning" if spinning else ""
     progress = '<span class="cm-train-spin-note" aria-hidden="true">くるくる まわっているよ…</span>' if animate else ""
+    popup = cm_train_prize_popup(prize) if animate and prize in CM_TRAIN_SYMBOLS else ""
     return (f'<section class="cm-train-machine{motion}" aria-label="電車ルーレット" '
             f'style="--finish:{CM_TRAIN_REEL_STOPS[-1]}ms;{artwork}">'
             f'<div class="cm-train-grid">{"".join(windows)}</div>'
             f'<div class="cm-train-result" role="status">{progress}'
-            f'<span class="cm-train-message">{message}</span></div></section>')
+            f'<span class="cm-train-message">{message}</span></div>{popup}</section>')
 
 
-def cm_train_collection(collection):
+def cm_train_collection(collection, pending_prize=None):
     cards = []
+    already_owned = False
     for train, (line, series, artwork) in CM_TRAIN_SYMBOLS.items():
-        owned = collection.get(train, 0)
-        if not owned:
+        owned = int(collection.get(train, 0))
+        if owned <= 0:
             continue
+        pending = train == pending_prize
+        already_owned = already_owned or not pending or owned > 1
+        state = " cm-train-card-new" if pending and owned == 1 else ""
+        count = f"{owned}まい"
+        if pending and owned > 1:
+            count = (f'<span class="cm-train-count-before">{owned - 1}まい</span>'
+                     f'<span class="cm-train-count-after">{owned}まい</span>')
+        destination, feature = CM_TRAIN_DETAILS[train]
+        image = f'data:image/webp;base64,{artwork}'
         cards.append(
-            f'<article class="cm-train-card"><img src="data:image/webp;base64,{artwork}" alt="">'
-            f'<strong>{html.escape(line)}<br>{html.escape(series)}</strong><span>{int(owned)}まい</span></article>')
+            f'<details class="cm-train-card{state}"><summary>'
+            f'<img class="cm-train-card-art" src="{image}" alt="" />'
+            f'<strong>{html.escape(line)}<br />{html.escape(series)}</strong>'
+            f'<span class="cm-train-card-summary">{count}</span>'
+            '<span class="cm-train-card-more">くわしく見る</span></summary>'
+            '<div class="cm-train-card-detail">'
+            f'<img class="cm-train-card-large" src="{image}" loading="lazy" alt="" />'
+            f'<div class="cm-train-destination">行先表示　{html.escape(destination)}</div>'
+            f'<div class="cm-train-feature">{html.escape(feature)}</div>'
+            '</div></details>')
+    empty_message = "あたりが出ると、ここに電車メダルがならびます。"
     if cards:
-        st.markdown('<div class="cm-train-collection">' + "".join(cards) + '</div>', unsafe_allow_html=True)
+        empty = (f'<p class="cm-train-empty-before">{empty_message}</p>'
+                 if not already_owned else "")
+        st.markdown(empty + '<div class="cm-train-collection">' + "".join(cards) + '</div>',
+                    unsafe_allow_html=True)
     else:
-        st.caption("あたりが出ると、ここに電車メダルがならびます。")
+        st.caption(empty_message)
 
 
 def cm_train_queue(profile, grade):
@@ -1246,12 +1343,15 @@ def render_train_roulette(profile):
                           args=(profile, grade))
                 st.caption(rule)
     st.subheader("電車コレクション")
-    cm_train_collection(overview.get("collection", {}))
+    pending_prize = (new_result or {}).get("prize_train")
+    if len((new_result or {}).get("board") or ()) != 9:
+        pending_prize = None
+    cm_train_collection(overview.get("collection", {}), pending_prize)
 
 
 def render_navigation() -> None:
-    labels = (("home", "ホーム"), ("today", "今日の成果"), ("history", "過去のスタンプ"),
-              ("roulette", "電車ルーレット"), ("inbox", "おうえん・メッセージ"))
+    labels = (("home", "ホーム"), ("roulette", "電車ルーレット"), ("today", "今日の成果"),
+              ("history", "過去のスタンプ"), ("inbox", "おうえん・メッセージ"))
     with st.container(key="cm_navigation"):
         cols = st.columns(len(labels), gap="small")
         for col, (page, label) in zip(cols, labels):
