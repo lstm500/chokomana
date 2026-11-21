@@ -56,9 +56,9 @@ FIELDS = (
 GRADE_NAMES = {"gold": "金", "silver": "銀", "bronze": "銅", "white": "白"}
 CM_SPEECH_MEDALS = "/rest/v1/chokomana_speech_medals"
 CM_SPEECH_PROMPTS = (
-    "なまむぎ なまごめ なまたまご",
-    "あかまきがみ あおまきがみ",
-    "すももも ももも もものうち",
+    ("なまむぎ", "なまごめ", "なまたまご"),
+    ("あかまきがみ", "あおまきがみ"),
+    ("すももも ももも", "もものうち"),
 )
 SUBJECT_NAMES = {"kotoba": "国語", "soroban": "そろばん", "geometry": "図形", "english": "英語", "moji": "ひらがな・カタカナ", "reading": "読書", "geography": "社会・地理"}
 APP_DEFINITIONS = (
@@ -441,7 +441,7 @@ def fetch_day(url: str, public_key: str, profile_id: str, target_day: date, acce
     return rows, truncated
 
 
-def cm_speech_prompt(target_day):
+def cm_speech_parts(target_day):
     return CM_SPEECH_PROMPTS[target_day.toordinal() % len(CM_SPEECH_PROMPTS)]
 
 
@@ -454,7 +454,7 @@ def cm_speech_text(value):
         ("生麦", "なまむぎ"), ("生米", "なまごめ"), ("生卵", "なまたまご"),
         ("生玉子", "なまたまご"), ("赤", "あか"), ("青", "あお"),
         ("巻き紙", "まきがみ"), ("巻紙", "まきがみ"),
-        ("李", "すもも"), ("桃", "もも"), ("内", "うち"),
+        ("す桃", "すもも"), ("李", "すもも"), ("桃", "もも"), ("内", "うち"),
     ):
         value = value.replace(written, reading)
     return "".join(c for c in value if not c.isspace() and not unicodedata.category(c).startswith("P"))
@@ -476,14 +476,20 @@ def cm_speech_stamp_for_day(profile, target_day):
     return cm_speech_stamp(rows[0]) if rows else None
 
 
-def cm_award_speech_medal(profile, target_day, transcript):
+def cm_speech_next_part(parts, part, candidates):
+    if not isinstance(candidates, list):
+        return part
+    recognized = {cm_speech_text(value) for value in candidates[:5]
+                  if isinstance(value, str) and 0 < len(value) <= 120}
+    if cm_speech_text("".join(parts)) in recognized:
+        return len(parts)
+    return part + int(cm_speech_text(parts[part]) in recognized)
+
+
+def cm_award_speech_medal(profile, target_day):
     now = now_jst()
     if profile != st.session_state.get("cm_profile") or now.date() != target_day:
         return None, "ひづけが かわったよ。「最新のスタンプを読み込む」を おしてね。"
-    if not isinstance(transcript, str) or len(transcript) > 120:
-        return None, "もういちど いってみよう！"
-    if cm_speech_text(transcript) != cm_speech_text(cm_speech_prompt(target_day)):
-        return None, "うまく ききとれなかったよ。ゆっくり、もういちど！"
     rows = cm_account_request("POST", CM_SPEECH_MEDALS, {
         "profile_id": profile, "study_date": target_day.isoformat(), "finished_at": now.isoformat(),
     }, {"on_conflict": "profile_id,study_date"}, "resolution=ignore-duplicates,return=representation")
@@ -720,6 +726,8 @@ const AC=window.AudioContext||window.webkitAudioContext;
 let ctx=null,source=null,raf=0,token=0,voice=null;
 const playButton=document.getElementById('play');
 let speech={},speechMode=false,recognition=null,pending=null;
+let listening=false,retryTimer=0,submitTimer=0,heard='',transientErrors=0;
+const MIC_RESULT_GUARD_MS=350;
 const post=(type,fields={})=>parent.postMessage({isStreamlitMessage:true,type,...fields},window.location.origin);
 const resize=()=>post('streamlit:setFrameHeight',{height:document.body.scrollHeight});
 items.forEach(x=>{const e=document.createElement('span');e.className='tile '+x.grade;const b=document.createElement('b');b.textContent=x.char;const sm=document.createElement('small');sm.textContent=x.reading;e.append(b,sm);tiles.appendChild(e)});
@@ -808,71 +816,117 @@ function setSpeechMode(){
  const prompt=document.getElementById('speech-prompt'),note=document.getElementById('speech-note');
  speechMode=true;playButton.classList.add('speech');
  playButton.textContent='🎙 しゃべる';
- prompt.textContent=speech.prompt;prompt.hidden=false;
+ updateSpeechPrompt();prompt.hidden=false;
  note.textContent='マイクを使います。音声はブラウザーの音声認識サービスに送信されることがあります。';
  note.hidden=false;
 }
+function updateSpeechPrompt(){
+ const parts=speech.parts||[],index=speech.part||0;
+ document.getElementById('speech-prompt').textContent=parts[index]
+  ? (index+1)+' / '+parts.length+'　'+parts[index] : '';
+}
+function queueRecognition(delay){
+ clearTimeout(retryTimer);
+ if(listening&&!document.hidden)retryTimer=setTimeout(listen,delay);
+}
 function listen(){
- if(recognition||pending)return;
- stop('ゆっくり、はっきり いってみよう！');
+ if(!listening||document.hidden||recognition||pending||submitTimer)return;
  const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
- if(!Recognition){status.textContent='このブラウザーでは おんせいにんしきが つかえません。';return}
+ if(!Recognition){cancelSpeech();status.textContent='このブラウザーでは おんせいにんしきが つかえません。';return}
  const listener=new Recognition();recognition=listener;
  listener.lang='ja-JP';listener.interimResults=false;listener.continuous=false;
- playButton.disabled=true;
+ listener.maxAlternatives=5;
+ let startedAt=0, accepted=false;
+ const current=()=>listening&&recognition===listener;
+ listener.onstart=()=>{
+  if(!current())return;
+  startedAt=Date.now();
+  playButton.textContent='🎙 きいています…';
+  status.textContent='おだいを ゆっくり いってみよう！';
+ };
+ listener.onspeechstart=()=>{if(current())status.textContent='こえを きいています…'};
+ listener.onspeechend=()=>{if(current())status.textContent='ことばを たしかめています…'};
  listener.onresult=event=>{
-  if(recognition!==listener)return;
-  const transcript=Array.from(event.results).filter(result=>result.isFinal)
-   .map(result=>result[0].transcript).join(' ').trim();
-  if(!transcript)return;
-  pending=crypto.randomUUID();
+  if(!current()||accepted||!startedAt||Date.now()-startedAt<MIC_RESULT_GUARD_MS)return;
+  const result=event.results?.[event.resultIndex||0]||event.results?.[0];
+  if(!result||result.isFinal===false)return;
+  const candidates=Array.from(result).slice(0,5)
+   .filter(item=>!(item.confidence>0&&item.confidence<0.22))
+   .map(item=>String(item.transcript||'').trim().slice(0,120)).filter(Boolean);
+  if(!candidates.length)return;
+  accepted=true;transientErrors=0;heard=candidates[0];
   status.textContent='ききとった ことばを たしかめています…';
-  post('streamlit:setComponentValue',{dataType:'json',value:{id:pending,transcript:transcript.slice(0,120)}});
+  try{listener.stop()}catch(error){}
+  submitTimer=setTimeout(()=>{
+   submitTimer=0;
+   if(!listening)return;
+   pending=crypto.randomUUID();
+   post('streamlit:setComponentValue',{dataType:'json',value:{id:pending,part:speech.part,candidates}});
+  },160);
  };
  listener.onerror=event=>{
-  if(recognition!==listener||pending)return;
-  status.textContent={
+  if(!current()||accepted)return;
+  const fatal={
    'not-allowed':'マイクの きょかを かくにんしてね。',
    'service-not-allowed':'このブラウザーの おんせいにんしきが つかえません。',
    'audio-capture':'マイクが つながっているか かくにんしてね。',
-   network:'おんせいにんしきに つながりません。もういちど ためしてね。',
-   'no-speech':'こえが きこえなかったよ。もういちど！'
-  }[event.error]||'もういちど いってみよう！';
+   'language-not-supported':'このブラウザーでは にほんごの おんせいにんしきが つかえません。'
+  }[event.error];
+  if(fatal){cancelSpeech();status.textContent=fatal;return}
+  recognition=null;
+  if(['no-speech','aborted'].includes(event.error)){
+   status.textContent='もういちど きくよ。';
+   queueRecognition(380);
+  }else if(++transientErrors<=2){
+   status.textContent='おんせいにんしきを つなぎなおしています…';
+   queueRecognition(500);
+  }else{
+   cancelSpeech();
+   status.textContent='おんせいにんしきに つながりません。「しゃべる」で もういちど。';
+  }
  };
  listener.onend=()=>{
   if(recognition!==listener)return;
-  recognition=null;playButton.disabled=Boolean(pending);
-  if(!pending&&status.textContent==='ゆっくり、はっきり いってみよう！'){
-   status.textContent='こえが きこえなかったよ。もういちど！';
-  }
+  recognition=null;
+  if(!accepted)queueRecognition(320);
  };
- try{listener.start()}catch(e){recognition=null;playButton.disabled=false;status.textContent='マイクを つかえませんでした。'}
+ try{listener.start()}catch(error){cancelSpeech();status.textContent='マイクを つかえませんでした。'}
 }
 function cancelSpeech(){
- if(!recognition)return;
- const listener=recognition;recognition=null;listener.abort();
- playButton.disabled=Boolean(pending);
+ listening=false;clearTimeout(retryTimer);clearTimeout(submitTimer);submitTimer=0;
+ const listener=recognition;recognition=null;
+ try{listener?.abort()}catch(error){}
+ if(speechMode)playButton.textContent='🎙 しゃべる';
 }
 playButton.addEventListener('click',()=>{
- if(speechMode){listen();return}
- if(speech.prompt&&!speech.awarded){setSpeechMode();resize()}
+ if(speechMode){
+  if(!listening&&!pending){stop('マイクを じゅんびしています…');transientErrors=0;listening=true;listen()}
+  return;
+ }
+ if(speech.parts?.length&&!speech.awarded){setSpeechMode();resize()}
  playRhythm();
 });
 document.getElementById('stop').addEventListener('click',()=>{cancelSpeech();stop()});
 window.addEventListener('pagehide',()=>{cancelSpeech();stop()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelSpeech();stop()}});
 if(__SPEECH_ENABLED__){
  window.addEventListener('message',event=>{
   if(event.source!==parent||event.origin!==location.origin||event.data?.type!=='streamlit:render')return;
   speech=event.data.args.speech||{};
   if(pending&&speech.ack?.id===pending){
-   pending=null;cancelSpeech();playButton.disabled=false;
-   status.textContent=speech.ack.message;
-   if(speech.awarded){
-    speechMode=false;playButton.classList.remove('speech');
-    playButton.textContent='▶ スタンプの リズムで あそぶ';
-    document.getElementById('speech-prompt').hidden=true;
-    document.getElementById('speech-note').hidden=true;
+   pending=null;updateSpeechPrompt();
+   if(listening||speech.awarded){
+    status.textContent=speech.ack.message+(speech.ack.show_heard&&heard?' 「'+heard+'」':'');
    }
+   heard='';
+   if(speech.ack.retry&&!speech.awarded)queueRecognition(500);
+   else cancelSpeech();
+  }
+  if(speechMode&&speech.awarded){
+   cancelSpeech();speechMode=false;playButton.classList.remove('speech');
+   playButton.textContent='▶ スタンプの リズムで あそぶ';
+   document.getElementById('speech-prompt').hidden=true;
+   document.getElementById('speech-note').hidden=true;
   }else if(!speechMode&&speech.awarded&&!speech.ack){
    status.textContent='きょうの「しゃべるメダル」は かくとくずみ！';
   }
@@ -2387,29 +2441,63 @@ def render_stamp_book(rows: list[dict], target_day: date, truncated: bool, *, sp
     if (st.session_state.get('cm_receipt_jump') or {}).get('place')=='attempt':cm_receipt_jump_ui()
 
 
+def cm_handle_speech_result(state_key, rows, profile, target_day):
+    event = st.session_state.get(state_key)
+    if not isinstance(event, dict) or st.session_state.get("cm_page") != "today":
+        return
+    key = "cm_today_speech_ack"
+    progress = st.session_state.get(key, {})
+    if progress.get("key") != state_key:
+        progress = {}
+    part = progress.get("part", 0)
+    parts = cm_speech_parts(target_day)
+    ident = event.get("id")
+    if (not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f-]{36}", ident)
+            or progress.get("ack", {}).get("id") == ident or part >= len(parts)):
+        return
+    if profile != st.session_state.get("cm_profile") or now_jst().date() != target_day:
+        ack = {"message": "ひづけが かわったよ。「最新のスタンプを読み込む」を おしてね。"}
+    elif event.get("part") != part:
+        ack = {"message": "ひょうじされた おだいを もういちど いってね。", "retry": True}
+    else:
+        next_part = cm_speech_next_part(parts, part, event.get("candidates"))
+        if next_part == part:
+            ack = {"message": "もういちど ゆっくり いってね。きこえた ことば", "retry": True, "show_heard": True}
+        elif next_part < len(parts):
+            part = next_part
+            ack = {"message": "できた！ つぎの ことばを いってみよう。", "retry": True}
+        else:
+            try:
+                stamp, message = cm_award_speech_medal(profile, target_day)
+            except RuntimeError:
+                stamp, message = None, "メダルを ほぞんできなかったよ。「しゃべる」で もういちど。"
+            if stamp:
+                part = len(parts)
+                st.session_state.cm_today_rows = [*rows, stamp]
+                st.session_state.pop("cm_history_loaded_for", None)
+                st.session_state["cm_today_speech_refresh_grid"] = True
+            ack = {"message": message}
+    st.session_state[key] = {"key": state_key, "part": part, "ack": {"id": ident, **ack}}
+
+
+@st.fragment
 def render_speech_rhythm(rows, levels, profile, target_day, awarded):
     state_key = f"cm_today_speech_{profile}_{target_day}"
-    ack_key = "cm_today_speech_ack"
-    saved_ack = st.session_state.get(ack_key, {})
-    ack = saved_ack.get("ack") if saved_ack.get("key") == state_key else None
-    event = cm_auth_component(voice_panel(rows, levels, speech_enabled=True))(
-        key=state_key, speech={"prompt": cm_speech_prompt(target_day), "awarded": awarded, "ack": ack},
-        default=None,
+    if st.session_state.pop("cm_today_speech_refresh_grid", False):
+        # Only a new medal needs a full rerun to refresh the stamp grid.
+        st.rerun()
+    progress = st.session_state.get("cm_today_speech_ack", {})
+    if progress.get("key") != state_key:
+        progress = {}
+    callback = None
+    if not awarded:
+        def callback():
+            cm_handle_speech_result(state_key, rows, profile, target_day)
+    cm_auth_component(voice_panel(rows, levels, speech_enabled=True))(
+        key=state_key, default=None, on_change=callback,
+        speech={"parts": cm_speech_parts(target_day), "part": progress.get("part", 0),
+                "awarded": awarded, "ack": progress.get("ack")},
     )
-    if not isinstance(event, dict) or awarded:
-        return
-    ident = event.get("id")
-    if not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f-]{36}", ident) or (ack and ack["id"] == ident):
-        return
-    try:
-        stamp, message = cm_award_speech_medal(profile, target_day, event.get("transcript"))
-    except RuntimeError:
-        stamp, message = None, "メダルを ほぞんできなかったよ。もういちど ためしてね。"
-    if stamp:
-        st.session_state.cm_today_rows = [*rows, stamp]
-        st.session_state.pop("cm_history_loaded_for", None)
-    st.session_state[ack_key] = {"key": state_key, "ack": {"id": ident, "message": message}}
-    st.rerun()
 
 
 def render_today(url: str, key: str, profile: str, missing: list[str]) -> None:
