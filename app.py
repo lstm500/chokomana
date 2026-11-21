@@ -1669,7 +1669,12 @@ CM_TRAIN_LINES = {
     "top": (1, 2, 3), "middle": (4, 5, 6), "bottom": (7, 8, 9),
     "down": (1, 5, 9), "up": (7, 5, 3),
 }
-CM_TRAIN_RULES = {"gold": "横3・斜め2", "silver": "横3", "bronze": "斜め2", "white": "中央の横1"}
+CM_TRAIN_RULES = {
+    "gold": (3, "横3本・斜め2本"),
+    "silver": (2, "横3本・斜め2本"),
+    "bronze": (1, "横3本・斜め2本"),
+    "white": (1, "横3本"),
+}
 CM_TRAIN_STYLE = """<style>
 .st-key-cm_navigation [data-testid=stHorizontalBlock],.st-key-cm_train_buttons [data-testid=stHorizontalBlock]{
   display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.4rem
@@ -1835,6 +1840,8 @@ def cm_train_board(result, animate=False, *, spinning=False):
             message = f"{grade}メダルで 当たり！ 電車メダルをゲット"
         else:
             message = f"{grade}メダルで ざんねん。つぎは そろうかな？"
+        if result.get("round_total", 1) > 1:
+            message = f'{result["round_number"]} / {result["round_total"]}回　{message}'
     else:
         message = "くるくる まわっているよ…" if spinning else "メダルをえらんで まわそう"
 
@@ -1907,12 +1914,14 @@ def cm_train_collection(collection, pending_prize=None):
         st.caption(empty_message)
 
 
-def cm_train_queue(profile, grade):
+def cm_train_queue(profile, grade, previous_id=None):
     from uuid import uuid4
 
-    if (profile == st.session_state.get("cm_profile") and grade in CM_TRAIN_RULES
+    if (profile == st.session_state.get("cm_profile") and (grade is None or grade in CM_TRAIN_RULES)
             and not st.session_state.get("cm_train_pending")):
-        st.session_state["cm_train_pending"] = {"profile": profile, "grade": grade, "id": str(uuid4())}
+        st.session_state["cm_train_pending"] = {
+            "profile": profile, "grade": grade, "id": str(uuid4()), "previous_id": previous_id,
+        }
 
 
 def render_train_roulette(profile):
@@ -1924,13 +1933,20 @@ def render_train_roulette(profile):
     if pending and pending["profile"] == profile:
         try:
             board_slot.markdown(cm_train_board(None, spinning=True), unsafe_allow_html=True)
-            spin = cm_train_request("cm_train_spin_v2", profile, p_grade=pending["grade"],
-                                    p_request_id=pending["id"])
-            if spin.get("status") not in ("ok", "no_medal"):
+            spin = cm_train_request("cm_train_spin_v3", profile, p_grade=pending["grade"],
+                                    p_request_id=pending["id"], p_previous_id=pending.get("previous_id"),
+                                    p_train_catalog=list(CM_TRAIN_SYMBOLS))
+            if spin.get("status") not in ("ok", "no_medal", "round_in_progress", "no_round", "round_changed"):
                 raise RuntimeError("Unexpected roulette result")
             st.session_state.pop("cm_train_pending", None)
             if spin["status"] == "no_medal":
                 notice = "その色で使えるメダルがありません。"
+            elif spin["status"] == "round_in_progress":
+                notice = "先に、のこりの ルーレットを まわしてね。"
+            elif spin["status"] == "no_round":
+                notice = "このメダルの ルーレットは おわったよ。"
+            elif spin["status"] == "round_changed":
+                notice = "ルーレットの つづきが こうしんされたよ。"
         except Exception as exc:
             board_slot.markdown(cm_train_board(None), unsafe_allow_html=True)
             cm_diag_record("roulette_error", "train_spin", status="error", error=exc)
@@ -1940,7 +1956,7 @@ def render_train_roulette(profile):
             return
 
     try:
-        overview = spin["overview"] if spin else cm_train_request("cm_train_overview", profile)
+        overview = spin["overview"] if spin else cm_train_request("cm_train_overview_v3", profile)
     except Exception as exc:
         cm_diag_record("roulette_error", "train_overview", status="error", error=exc)
         saved = spin if spin and spin["status"] == "ok" else None
@@ -1955,17 +1971,23 @@ def render_train_roulette(profile):
                         unsafe_allow_html=True)
     if notice:
         st.info(notice)
-    st.caption("メダル1まいで 1かい。ボタンの下は、あたりになる列だよ。")
     balances = overview.get("balances", {})
-    with st.container(key="cm_train_buttons"):
-        cols = st.columns(4, gap="small")
-        for col, (grade, rule) in zip(cols, CM_TRAIN_RULES.items()):
-            count = balances.get(grade, 0)
-            with col:
-                cm_button(f"{GRADE_NAMES[grade]}でまわす · {count}枚", key="cm_train_spin_" + grade,
-                          disabled=count <= 0, use_container_width=True, on_click=cm_train_queue,
-                          args=(profile, grade))
-                st.caption(rule)
+    remaining = overview.get("rounds_remaining", 0)
+    if remaining:
+        cm_button(f"つぎを まわす（のこり{remaining}回）", key="cm_train_continue",
+                  type="primary", use_container_width=True, on_click=cm_train_queue,
+                  args=(profile, None, overview["latest"]["request_id"]))
+    else:
+        st.caption("メダル1まいで まわせる かいすうと、あたりの ラインだよ。")
+        with st.container(key="cm_train_buttons"):
+            cols = st.columns(4, gap="small")
+            for col, (grade, (rounds, lines)) in zip(cols, CM_TRAIN_RULES.items()):
+                count = balances.get(grade, 0)
+                with col:
+                    cm_button(f"{GRADE_NAMES[grade]}でまわす · {count}枚", key="cm_train_spin_" + grade,
+                              disabled=count <= 0, use_container_width=True, on_click=cm_train_queue,
+                              args=(profile, grade))
+                    st.caption(f"1枚で{rounds}回 · {lines}")
     st.subheader("電車コレクション")
     pending_prize = (new_result or {}).get("prize_train")
     if len((new_result or {}).get("board") or ()) != 9:
