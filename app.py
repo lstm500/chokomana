@@ -4267,19 +4267,14 @@ def cm_plan_launch_links(items, apps):
 
 
 def cm_analysis_units(catalog, events, stamps, source, profile):
-    """Aggregate first attempts per catalog menu, retaining identifiable historical units."""
+    """Aggregate first attempts for active, individual catalog units."""
     import unicodedata
 
     def normalized(value):
         return ''.join(unicodedata.normalize('NFKC', str(value or '')).split())
 
     units = {}
-    catalog_labels = {}
     score_methods = {}
-
-    def unit(key, label, menu_id=None):
-        return units.setdefault(key, {'label': label, 'menu_id': menu_id,
-                                      'correct': 0, 'total': 0, 'attempts': set(), 'last': None})
 
     def record(entry, attempt, when):
         entry['attempts'].add(attempt)
@@ -4289,23 +4284,38 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
     legacy_lookup = {}
     difficulty_names = {'beginner': '初級', 'intermediate': '中級', 'advanced': '上級',
                         'expert': '特級', 'master': '名人', '1': '初級', '2': '中級', '3': '上級'}
+    latest = {}
     for row in catalog:  # Ordered newest first by the catalog query.
         if row['source_app'] != source:
             raise RuntimeError('analysis catalog source mismatch')
         menu_id = row['entry_id']
         payload = row.get('payload') or {}
+        latest.setdefault(menu_id, row)
         label = payload.get('label') or payload.get('category_label') or menu_id
-        catalog_labels.setdefault(menu_id, label)
-        score_methods.setdefault(menu_id, payload.get('assessment_method'))
-        if payload.get('is_active') is not False:
-            difficulty = payload.get('difficulty_id')
-            names = (difficulty, difficulty_names.get(str(difficulty)), label, payload.get('difficulty_label'))
-            for name in names:
-                if payload.get('category_id') and name:
-                    alias = (normalized(payload['category_id']), normalized(name))
-                    legacy_lookup.setdefault(alias, set()).add(menu_id)
-    for menu_id, label in catalog_labels.items():
-        unit(('menu', menu_id), label, menu_id)
+        difficulty = payload.get('difficulty_id')
+        names = (difficulty, difficulty_names.get(str(difficulty)), label, payload.get('difficulty_label'))
+        for name in names:
+            if payload.get('category_id') and name:
+                alias = (normalized(payload['category_id']), normalized(name))
+                legacy_lookup.setdefault(alias, set()).add(menu_id)
+
+    english_version = catalog[0].get('content_version') if catalog and source == 'english' else None
+    for menu_id, row in latest.items():
+        payload = row.get('payload') or {}
+        label = payload.get('label') or payload.get('category_label') or menu_id
+        compact_label = normalized(label).strip('・:：/|-()（）')
+        aggregate = (
+            payload.get('is_aggregate') is True or bool(payload.get('child_menu_ids'))
+            or re.fullmatch(r'(?:基礎級|入門|初級|中級|上級|特級|名人)?[・:：/|\-（(]*(?:全部|すべて|全単元|全種類|全レベル)[）)]*', compact_label)
+            or (source == 'geography' and payload.get('region') == 'all')
+        )
+        if payload.get('is_active') is False or aggregate:
+            continue
+        if english_version is not None and row.get('content_version') != english_version:
+            continue
+        score_methods[menu_id] = payload.get('assessment_method')
+        units[('menu', menu_id)] = {'label': label, 'menu_id': menu_id, 'correct': 0,
+                                   'total': 0, 'attempts': set(), 'last': None}
 
     unique = {}
     for row in events:
@@ -4315,16 +4325,17 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
     rows = sorted(unique.values(), key=lambda row: (
         cm_plan_date(row['occurred_at']) or datetime.min.replace(tzinfo=timezone.utc),
         row['sequence'], row['event_id']))
-    starts, items = {}, {}
+    starts, items, logged_starts = {}, {}, set()
     for row in rows:
         data = row.get('payload') or {}
         attempt = row['attempt_id']
         if row['event_type'] == 'session_started' and data.get('menu_id'):
+            logged_starts.add(attempt)
             menu_id = data['menu_id']
-            label = catalog_labels.get(menu_id) or data.get('menu_label') or menu_id
-            entry = unit(('menu', menu_id), label, menu_id)
-            starts[attempt] = entry
-            record(entry, attempt, cm_plan_date(row['occurred_at']))
+            entry = units.get(('menu', menu_id))
+            if entry is not None:
+                starts[attempt] = entry
+                record(entry, attempt, cm_plan_date(row['occurred_at']))
         elif row['event_type'] == 'item_presented' and row.get('occurrence_id'):
             items[(attempt, row['occurrence_id'])] = data
 
@@ -4361,18 +4372,18 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
         seen_stamps.add(attempt)
         entry = starts.get(attempt)
         if entry is None:
-            category = row.get('category_key') or row.get('category_label') or '単元不明'
+            if attempt in logged_starts:
+                continue
+            category = row.get('category_key') or row.get('category_label') or ''
             difficulty = str(row.get('difficulty') or '')
             candidates = set()
             for name in (difficulty, difficulty_names.get(difficulty)):
                 candidates.update(legacy_lookup.get((normalized(category), normalized(name)), ()))
-            if len(candidates) == 1:
-                entry = units[('menu', next(iter(candidates)))]
-            else:
-                label = row.get('category_label') or category
-                if difficulty and normalized(difficulty) not in normalized(label):
-                    label += ' / ' + (difficulty_names.get(difficulty) or difficulty)
-                entry = unit(('legacy', category, difficulty), label)
+            if len(candidates) != 1:
+                continue
+            entry = units.get(('menu', next(iter(candidates))))
+            if entry is None:
+                continue
         record(entry, attempt, cm_plan_date(row['finished_at']))
         correct, total = row.get('correct_count'), row.get('total_count')
         # Historic medals are scored only for apps with automatic quiz grading.
@@ -4384,24 +4395,30 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
     return units
 
 
-def cm_analysis_load(source, profile):
-    params = {'source_app': 'eq.' + source}
+def cm_analysis_load(sources, profile):
+    params = {'source_app': 'in.(' + ','.join(sources) + ')'}
     catalog = cm_plan_rows('chokomana_learning_catalog', {
         **params, 'entry_type': 'eq.menu', 'select': 'source_app,entry_id,content_version,payload,published_at',
-        'order': 'published_at.desc.nullslast,entry_id,content_version.desc',
+        'order': 'source_app,published_at.desc.nullslast,entry_id,content_version.desc',
     })
     owned = {**params, 'profile_id': 'eq.' + profile}
     events = cm_plan_rows('chokomana_learning_events', {
         **owned, 'event_type': 'in.(session_started,item_presented,response_submitted)',
         'select': 'event_id,profile_id,source_app,attempt_id,event_type,sequence,occurred_at,occurrence_id,payload',
-        'order': 'occurred_at,event_id',
+        'order': 'occurred_at,event_id,source_app',
     })
     stamps = cm_plan_rows(TABLE_NAME, {
         **owned, 'select': 'profile_id,source_app,attempt_id,category_key,category_label,difficulty,'
                            'correct_count,total_count,grade,finished_at',
-        'order': 'finished_at,attempt_id',
+        'order': 'finished_at,attempt_id,source_app',
     })
-    return cm_analysis_units(catalog, events, stamps, source, profile)
+    by_source = {source: [[], [], []] for source in sources}
+    for index, rows in enumerate((catalog, events, stamps)):
+        for row in rows:
+            if row['source_app'] not in by_source:
+                raise RuntimeError('analysis source mismatch')
+            by_source[row['source_app']][index].append(row)
+    return {source: cm_analysis_units(*by_source[source], source, profile) for source in sources}
 
 
 def cm_analysis_set_unit(source, menu_id, kind, enabled, expected_version):
@@ -4457,33 +4474,32 @@ def render_analysis_management():
     profile = st.session_state['cm_profile']
     app_col, refresh_col = st.columns([3, 1], gap='small', vertical_alignment='bottom')
     with app_col:
-        source = st.selectbox('学習アプリ', SUBJECT_NAMES, format_func=SUBJECT_NAMES.__getitem__,
-                              key='cm_analysis_source')
+        labels = {'all': 'すべての学習アプリ', **SUBJECT_NAMES}
+        selected = st.selectbox('学習アプリ', tuple(labels), format_func=labels.__getitem__,
+                                key='cm_analysis_source')
+        sources = tuple(SUBJECT_NAMES) if selected == 'all' else (selected,)
     with refresh_col:
         refresh = cm_button('記録を更新', key='cm_analysis_refresh', use_container_width=True)
     cached = st.session_state.get('cm_analysis_data')
     try:
-        if refresh or not cached or cached['key'] != (profile, source) or time.monotonic() - cached['at'] >= 30:
+        if refresh or not cached or cached.get('profile') != profile or time.monotonic() - cached['at'] >= 30:
+            cached = {'profile': profile, 'at': time.monotonic(), 'apps': {}}
+        missing = tuple(source for source in sources if source not in cached['apps'])
+        if missing:
             with st.spinner('学習記録を集計しています…'):
-                units = cm_analysis_load(source, profile)
-            cached = {'key': (profile, source), 'at': time.monotonic(), 'units': units}
-            st.session_state['cm_analysis_data'] = cached
+                cached['apps'].update(cm_analysis_load(missing, profile))
+        st.session_state['cm_analysis_data'] = cached
         states = cm_graduation_states(profile)
         if any(row['profile_id'] != profile for row in states):
             raise RuntimeError('analysis graduation owner mismatch')
-        saved = next((row.get('items') or {} for row in states if row['source_app'] == source), {})
+        saved_by_source = {row['source_app']: row.get('items') or {} for row in states}
     except (RuntimeError, ValueError, KeyError, TypeError) as exc:
         cm_diag_record('operation', 'cm_analysis_load', status='error', error=exc)
         cm_error('学習記録を読み込めませんでした。「記録を更新」で再試行してください。')
         return
 
-    units = {key: dict(value) for key, value in cached['units'].items()}
-    for key, value in saved.items():
-        if not key.startswith(('unit:', 'focus:')) or not isinstance((value or {}).get('record'), dict):
-            continue
-        menu_id = key.split(':', 1)[1]
-        units.setdefault(('menu', menu_id), {'label': menu_id, 'menu_id': menu_id,
-                                             'correct': 0, 'total': 0, 'attempts': set(), 'last': None})
+    units = {(source, key): dict(entry)
+             for source in sources for key, entry in cached['apps'][source].items()}
     if message := st.session_state.pop('cm_analysis_message', None):
         st.success(message)
     if error := st.session_state.pop('cm_analysis_error', None):
@@ -4495,7 +4511,8 @@ def render_analysis_management():
     def rate(entry):
         return entry['correct'] / entry['total'] if entry['total'] else None
 
-    for entry in units.values():
+    for (source, _), entry in units.items():
+        saved = saved_by_source.get(source, {})
         entry['certificate'] = (saved.get('unit:' + entry['menu_id']) or {}) if entry['menu_id'] else {}
         entry['graduated'] = isinstance(entry['certificate'].get('record'), dict)
         entry['focus'] = (saved.get('focus:' + entry['menu_id']) or {}) if entry['menu_id'] else {}
@@ -4537,27 +4554,28 @@ def render_analysis_management():
     .st-key-cm_analysis_grid [data-testid="stVerticalBlockBorderWrapper"] {overflow:auto;}
     </style>''', unsafe_allow_html=True)
     widths = (2.1, .85, .8, .8, .9, 1.4, 1.4, 1.5)
+    headers = ('単元', '正答率', '正解数', '採点数', '学習回数', '最終学習日', '重点単元', '修了認定')
+    if selected == 'all':
+        widths = (1.35, *widths)
+        headers = ('教科', *headers)
     with st.container(height=415, key='cm_analysis_grid'):
-        for col, label in zip(st.columns(widths, vertical_alignment='center'),
-                              ('単元', '正答率', '正解数', '採点数', '学習回数', '最終学習日', '重点単元', '修了認定')):
+        for col, label in zip(st.columns(widths, vertical_alignment='center'), headers):
             col.markdown(f'**{label}**')
-        for key, entry in visible:
+        for (source, key), entry in visible:
             cols = st.columns(widths, vertical_alignment='center')
             values = (
                 entry['label'], f"{rate(entry):.0%}" if entry['total'] else '—',
                 entry['correct'] if entry['total'] else '—', entry['total'], len(entry['attempts']),
                 entry['last'].astimezone(TOKYO).date().isoformat() if entry['last'] else '—',
             )
+            if selected == 'all':
+                values = (SUBJECT_NAMES[source], *values)
             for col, value in zip(cols, values):
                 col.text(str(value))
-            if not entry['menu_id']:
-                cols[6].text('—')
-                cols[7].text('未連携')
-                continue
             unit_key = hashlib.sha256(json.dumps([source, key], ensure_ascii=False).encode()).hexdigest()[:20]
             for col, kind, active, version, labels in (
-                (cols[6], 'focus', entry['focused'], entry['focus'].get('version'), ('重点にする', '重点中・解除')),
-                (cols[7], 'unit', entry['graduated'], entry['certificate'].get('version'), ('認定する', '認定済み・取消')),
+                (cols[-2], 'focus', entry['focused'], entry['focus'].get('version'), ('重点にする', '設定中')),
+                (cols[-1], 'unit', entry['graduated'], entry['certificate'].get('version'), ('修了する', '修了済み')),
             ):
                 with col:
                     if cm_button(labels[active], key=f'cm_analysis_{kind}_{unit_key}_{version}_{active}',
