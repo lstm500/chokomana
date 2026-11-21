@@ -3137,7 +3137,8 @@ CM_PLANNER_VERSION = 'adaptive-9-without-moji'
 def cm_daily_menu_allowed(menu, kuku_ready=False):
     # Handwriting is currently done in a notebook; keep the app accessible separately.
     if menu.get('source_app')=='moji':return False
-    if menu.get('source_app')=='geography' and menu.get('category_id')=='all':return False
+    if menu.get('source_app')=='geography':
+        return menu.get('menu_id','').startswith('geography.discovery.') and menu.get('region')!='all'
     return (menu.get('source_app')!='soroban' or menu.get('menu_id') in CM_SOROBAN_CHALLENGE_MENUS
             or (kuku_ready and menu.get('menu_id') in CM_SOROBAN_KUKU_MENUS))
 
