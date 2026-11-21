@@ -27,6 +27,7 @@ from __future__ import annotations
 import html
 import json
 import os
+from contextlib import nullcontext
 from datetime import date, datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
@@ -293,20 +294,12 @@ def cm_diag_bridge(show_download=False):
     d = cm_diag_state()
     settings = show_download
     snapshot = d['records'] if settings else d['records'][-80:]
-    event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
+    cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='48', default=None)
+        app_version='49', default=None)
     if not settings and st.session_state.get('cm_profile'):
         cm_kotoba_audio_bridge()
-    if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
-        nonce=event['refresh_plan']
-        if nonce!=st.session_state.get('cm_plan_last_visibility'):
-            st.session_state['cm_plan_last_visibility']=nonce
-            st.session_state.pop('cm_plan_snapshot',None)
-            for key in list(st.session_state):
-                if key.startswith('cm_link_plan_'):st.session_state.pop(key,None)
-            st.rerun()
 
 
 
@@ -1139,8 +1132,14 @@ def render_home(apps: list[dict]) -> None:
     launch_cards()
     @st.fragment(run_every=10)
     def daily_assignments():
-        render_daily_plan(apps)
+        event = cm_plan_return_event()
+        began = time.perf_counter()
+        render_daily_plan(apps, event)
         cm_diag_mark_ready()
+        if event:
+            cm_diag_record('render', 'cm_plan_return_render',
+                           trace_id=event['id'], stage=event['reason'],
+                           duration_ms=(time.perf_counter()-began)*1000)
     daily_assignments()
     with st.container(border=True, key="home_progress"):
         st.markdown('<div class="cm-progress-heading"><span>✦</span>きょうの がんばり</div>', unsafe_allow_html=True)
@@ -2900,12 +2899,12 @@ def cm_refresh_saved_daily_plan(row,profile,today):
     return latest['payload']
 
 
-def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None, refresh_progress=True):
+def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
     from uuid import uuid4
     profile=st.session_state['cm_profile'];today=now_jst().date();now=datetime.now(timezone.utc).isoformat()
     saved=cm_saved_daily_plan(profile,today)
     if saved is not None:
-        return cm_refresh_saved_daily_plan(saved,profile,today) if refresh_progress else saved['payload']
+        return cm_refresh_saved_daily_plan(saved,profile,today)
     bundle=cm_account_request('POST','/rpc/cm_hub_plan_bundle_v1',{'p_profile':profile})
     if not isinstance(bundle,dict) or bundle.get('profile_id')!=profile:raise RuntimeError('invalid planner bundle owner')
     catalog=bundle.get('catalog');events=bundle.get('events');all_medals=bundle.get('medals')
@@ -3053,7 +3052,66 @@ def cm_plan_items_html(items, links=None):
     return '<ol class="cm-plan-list">'+''.join(parts)+'</ol>'+('<details class="cm-plan-help cm-plan-all-details"><summary>課題の詳細・開き方</summary>'+''.join(detail_parts)+'</details>' if parts else '')
 
 
-def render_daily_plan(apps):
+CM_PLAN_RETURN_BRIDGE = r"""<!doctype html><html><meta charset="utf-8"><script>
+let retryTimer, lastHint, lastVisible = -Infinity;
+function notify(reason) {
+ const id = crypto.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
+ parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',
+  value:{id,reason},dataType:'json'},'*');
+}
+try {
+ const doc = parent.document, frame = window.frameElement;
+ const isVisible = () => frame?.isConnected && !doc.hidden;
+ function retry() {
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(() => { if (isVisible()) notify('return_retry'); }, 3000);
+ }
+ function onVisible() {
+  if (!isVisible()) { clearTimeout(retryTimer); return; }
+  const now = performance.now();
+  if (now - lastVisible < 750) return;
+  lastVisible = now;
+  notify('tab_visible');
+  retry();
+ }
+ parent.__cmPlanReturnCleanup?.();
+ doc.addEventListener('visibilitychange', onVisible);
+ parent.__cmPlanReturnCleanup = () => {
+  doc.removeEventListener('visibilitychange', onVisible);
+  clearTimeout(retryTimer);
+ };
+ window.addEventListener('message', event => {
+  if (event.source !== parent || event.data?.type !== 'streamlit:render') return;
+  const hint = event.data.args?.return_hint;
+  if (hint && hint !== lastHint) { lastHint = hint; retry(); }
+ });
+} catch {}
+parent.postMessage({isStreamlitMessage:true,type:'streamlit:componentReady',apiVersion:1},'*');
+parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:0},'*');
+</script></html>"""
+
+
+def cm_plan_return_event():
+    from uuid import uuid4
+    if st.query_params.get('cm_plan_return') == '1':
+        del st.query_params['cm_plan_return']
+        st.session_state['cm_plan_return_hint'] = str(uuid4())
+    event = cm_auth_component(CM_PLAN_RETURN_BRIDGE)(
+        key='cm_plan_return_bridge', return_hint=st.session_state.get('cm_plan_return_hint'), default=None)
+    if not isinstance(event, dict) or event.get('reason') not in ('tab_visible','return_retry'):
+        return None
+    ident = event.get('id')
+    if not isinstance(ident, str) or not re.fullmatch(r'[a-zA-Z0-9-]{1,64}', ident):
+        return None
+    if ident == st.session_state.get('cm_plan_return_last'):
+        return None
+    st.session_state['cm_plan_return_last'] = ident
+    if event['reason'] == 'return_retry':
+        st.session_state.pop('cm_plan_return_hint', None)
+    return {'id': ident, 'reason': event['reason']}
+
+
+def render_daily_plan(apps, return_event=None):
     with st.container(border=True,key='cm_daily_plan'):
         with st.container(key='cm_plan_toolbar'):
             title_col,refresh_col=st.columns([3,1],gap='small')
@@ -3071,14 +3129,18 @@ def render_daily_plan(apps):
         cached = st.session_state.get('cm_plan_snapshot')
         ready_sources={a['id'] for a in apps if a['ready']}
         cache_key = (st.session_state['cm_profile'],now_jst().date().isoformat())
-        if refresh or not cached or cached['key']!=cache_key or time.time()-cached['at']>=30:
+        cache_matches = cached is not None and cached['key'] == cache_key
+        if refresh or return_event or not cache_matches or time.time()-cached['at']>=30:
             try:
-                with st.spinner('今日のリストを読み込んでいます…'):
-                    payload = cm_load_daily_plan(age,ready_sources,refresh_progress=bool(refresh or (cached and cached['key']==cache_key)))
+                with nullcontext() if cache_matches else st.spinner('今日のリストを読み込んでいます…'):
+                    payload = cm_load_daily_plan(age,ready_sources)
                 cached = {'key':cache_key,'at':time.time(),'payload':payload}
                 st.session_state['cm_plan_snapshot']=cached
-            except (RuntimeError,ValueError,KeyError,TypeError):
-                if not cached or cached['key']!=cache_key:
+            except (RuntimeError,ValueError,KeyError,TypeError) as exc:
+                if return_event:
+                    cm_diag_record('operation','cm_plan_return_refresh',status='error',error=exc,
+                                   trace_id=return_event['id'],stage=return_event['reason'])
+                if not cache_matches:
                     cm_error('今日のリストを読み込めませんでした。「更新」で再試行してください。')
                     return
                 cached['at']=time.time()
@@ -3409,7 +3471,6 @@ function init(p,d){
   const observer=new p.MutationObserver(()=>state.check());observer.observe(d.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['data-cm-ready']});state.observer=observer;
   p.addEventListener('error',event=>{state.add('browser_error','script_or_resource',{status:'error',line:Number(event.lineno)||0});state.persist()},true);
   p.addEventListener('unhandledrejection',()=>{state.add('browser_error','unhandled_promise',{status:'error'});state.persist()});
-  d.addEventListener('visibilitychange',()=>{if(!d.hidden&&state.page==='home'&&Date.now()-(state.lastPlanRefresh||0)>5000){state.lastPlanRefresh=Date.now();state.notifyVisible?.()}});state.planVisibilityInstalled=true;
   p.addEventListener('pagehide',()=>state.persist());
   try{const observer=new p.PerformanceObserver(list=>{for(const entry of list.getEntries())state.add('long_task','main_thread',{duration_ms:Math.round(entry.duration),status:'observed'})});observer.observe({type:'longtask',buffered:true});state.longTaskObserver=observer}catch(e){}
  }
@@ -3417,13 +3478,11 @@ function init(p,d){
 }
 try{const p=window.parent,d=p.document;diag=p.__chokomanaPerformanceV1||(p.__chokomanaPerformanceV1=init(p,d))}
 catch(e){parentAccess=false;diag=init(window,null)}
-try{if(parentAccess&&!diag.planVisibilityInstalled){parent.document.addEventListener('visibilitychange',()=>{if(!parent.document.hidden&&diag.page==='home'&&Date.now()-(diag.lastPlanRefresh||0)>5000){diag.lastPlanRefresh=Date.now();diag.notifyVisible?.()}});diag.planVisibilityInstalled=true}}catch(e){}
 const download=document.getElementById('download'),result=document.getElementById('result');
 let appVersion='18',serverDropped=0;
 window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
- if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
  diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'42';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
