@@ -19,7 +19,7 @@ Optional Streamlit Secrets:
   SOROBAN_APP_URL = "https://...streamlit.app"
   GEOMETRY_APP_URL = "https://...streamlit.app"
   ENGLISH_APP_URL = "https://...streamlit.app"
-  GEOGRAPHY_APP_URL = "https://<公開済みの地理アプリ>.streamlit.app"
+  GEOGRAPHY_APP_URL = "https://chokomanasocialgeography-zcrrjkj2kznmos8j28zae5.streamlit.app/"
 
 Security: username/password accounts and sessions are verified server-side; launch tickets are one-time,
 service/secret keys are kept only in the Python server process.
@@ -43,6 +43,7 @@ import streamlit.components.v1 as components
 TOKYO = ZoneInfo("Asia/Tokyo")
 DEFAULT_MOJI_APP_URL = "https://chokomanakokugomoji-r8ue55i57c64ebtwonumqz.streamlit.app/"
 DEFAULT_ENGLISH_APP_URL = 'https://chokomanaeigojunior-wuyqysc66uknyiyvpdvaw2.streamlit.app/'
+DEFAULT_GEOGRAPHY_APP_URL = "https://chokomanasocialgeography-zcrrjkj2kznmos8j28zae5.streamlit.app/"
 DEFAULT_SUPABASE_URL = "https://keewulninyoeylgflshb.supabase.co"
 TABLE_NAME = "chokomana_stamps"
 BATCH_SIZE = 400
@@ -66,8 +67,8 @@ APP_DEFINITIONS = (
     {"id": "geometry", "title": "ずけいのアトリエ", "tag": "図形で考える", "symbol": "図", "secret": "GEOMETRY_APP_URL", "icon": "△"},
     {"id": "moji", "title": "ひらがな・カタカナ", "tag": "もじを かこう", "symbol": "字", "secret": "MOJI_APP_URL", "icon": "あア"},
     {"id": "english", "title": "えいご・ジュニア", "tag": "おとと ことばで あそぼう", "symbol": "英", "secret": "ENGLISH_APP_URL", "icon": "ABC"},
-    {"id": "reading", "title": "ほんのともだち", "tag": "ほんを よむ おてつだい", "symbol": "読", "secret": "READING_APP_URL", "icon": "📖"},
     {"id": "geography", "title": "しゃかい・ちり", "tag": "日本地図パズル", "symbol": "地", "secret": "GEOGRAPHY_APP_URL", "icon": "地"},
+    {"id": "reading", "title": "ほんのともだち", "tag": "ほんを よむ おてつだい", "symbol": "読", "secret": "READING_APP_URL", "icon": "📖"},
 )
 
 
@@ -350,7 +351,11 @@ def _setting(name: str, default: str = "") -> str:
     if val is None:
         val = os.environ.get(name, default)
     value = str(val or "").strip()
-    return value or ({"ENGLISH_APP_URL":DEFAULT_ENGLISH_APP_URL,"MOJI_APP_URL":DEFAULT_MOJI_APP_URL}.get(name,""))
+    return value or {
+        "ENGLISH_APP_URL": DEFAULT_ENGLISH_APP_URL,
+        "MOJI_APP_URL": DEFAULT_MOJI_APP_URL,
+        "GEOGRAPHY_APP_URL": DEFAULT_GEOGRAPHY_APP_URL,
+    }.get(name, "")
 
 
 def _valid_https_url(value: str) -> bool:
@@ -2226,8 +2231,18 @@ def cm_prepare_launch_links(apps):
             'link':cm_launch_url(app['url'],code),'expiry':expiry}
     if payload:
         url,key = cm_service_config()
-        cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,
-                       payload=payload,prefer='return=minimal')
+        try:
+            cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,
+                           payload=payload,prefer='return=minimal')
+        except RuntimeError as exc:
+            # An older shared schema can reject geography tickets before its migration.
+            if "geography" not in pending or "HTTP 400" not in str(exc):
+                raise
+            pending.pop("geography")
+            other_tickets = [ticket for ticket in payload if ticket["source_app"] != "geography"]
+            if other_tickets:
+                cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,
+                               payload=other_tickets,prefer='return=minimal')
         for source, cache in pending.items():
             st.session_state['cm_link_'+source] = cache
             links[source] = cache['link']
@@ -2271,18 +2286,19 @@ def home_cards_html(apps: list[dict]) -> str:
         icon = icons.get(app_id, "").replace("currentColor", icon_color)
         body = (f'<span class="cm-subject-icon">{icon}</span>'
                 f'<span class="cm-subject-label">{html.escape(label)}</span>')
-        if app["ready"]:
-            try:
-                link = links.get(app_id)
-                if not link:
-                    raise RuntimeError("起動リンクの準備に失敗しました")
-                cards.append(f'<a class="cm-subject cm-subject-{html.escape(app_id)}" '
-                             f'href="{html.escape(link, quote=True)}" target="_blank" rel="noopener noreferrer" '
-                             f'aria-label="{html.escape(app["title"], quote=True)}を別タブで開く">'
-                             f'{body}<span class="cm-subject-go">あそぶ<span aria-hidden="true"> →</span></span></a>')
-                continue
-            except (RuntimeError, ValueError):
-                pass
+        link = links.get(app_id) if app["ready"] else None
+        action = "あそぶ"
+        aria_label = f'{app["title"]}を別タブで開く'
+        if not link and app_id == "geography" and app["ready"] and _valid_https_url(app["url"]):
+            link = app["url"]
+            action = "れんけいなしで あそぶ"
+            aria_label = f'{app["title"]}を学習記録の連携なしで別タブで開く'
+        if link:
+            cards.append(f'<a class="cm-subject cm-subject-{html.escape(app_id)}" '
+                         f'href="{html.escape(link, quote=True)}" target="_blank" rel="noopener noreferrer" '
+                         f'aria-label="{html.escape(aria_label, quote=True)}">'
+                         f'{body}<span class="cm-subject-go">{action}<span aria-hidden="true"> →</span></span></a>')
+            continue
         cards.append(f'<div class="cm-subject cm-subject-{html.escape(app_id)} cm-subject-disabled" '
                      f'aria-disabled="true">{body}<span class="cm-subject-go">じゅんび中</span></div>')
     return cm_launch_connection_hints(apps) + '<div class="cm-subject-grid">' + "".join(cards) + '</div>'
