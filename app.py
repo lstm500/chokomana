@@ -108,7 +108,7 @@ def cm_diag_record(kind, action, *, duration_ms=None, status='ok', error=None, *
         row['trace_id'] = d['pending']['id']
     if duration_ms is not None:
         row['duration_ms'] = round(max(0,float(duration_ms)),2)
-    for key in ('http_status','method','endpoint','row_count','page','frame','line','provider_code'):
+    for key in ('http_status','method','endpoint','row_count','page','frame','line','provider_code','trace_id','menu_id','stage'):
         if key in fields and isinstance(fields[key],(str,int,float,bool)):
             row[key] = fields[key]
     if error is not None:
@@ -238,7 +238,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='40', default=None)
+        app_version='41', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -1088,6 +1088,9 @@ def render_home(apps: list[dict]) -> None:
             _open_today()
             st.rerun()
     st.caption("学習アプリは別のタブで開きます。")
+    with st.expander('動作ログ・応答速度'):
+        cm_diag_bridge(show_download=True)
+        cm_server_log_download('home')
 
     if (st.session_state.get('cm_receipt_jump') or {}).get('place')=='general':cm_receipt_jump_ui()
 
@@ -1594,6 +1597,7 @@ def render_settings():
         st.markdown("**動作ログ**")
         st.caption("操作時間・通信時間・エラーをJSON形式で保存できます。")
         cm_diag_bridge(show_download=True)
+        cm_server_log_download('settings')
         st.caption("直近2,000件を記録します。クリックから表示までは描画の目安です。学習アプリ内部の表示時間は含みません。")
     render_plan_age()
     render_medal_audio_settings()
@@ -2034,6 +2038,7 @@ def cm_launch_url(base,code):
         raise ValueError('HTTPSの学習アプリURLを設定してください')
     query=dict(parse_qsl(parsed.query,keep_blank_values=True))
     query['cm_launch']=code
+    query['cm_trace']=hashlib.sha256(code.encode()).hexdigest()[:16]
     return urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode(query),''))
 
 # Adaptive planning uses observed responses, never medal colors or a language model's guesses.
@@ -2721,6 +2726,7 @@ def cm_plan_launch_links(items, apps):
         if cached and cached.get('profile')==profile and cached.get('url')==app['url'] and cached.get('completion_revision')==revision and cached['expiry']>now+timedelta(seconds=70):
             links[item['plan_item_id']]=cached['link'];continue
         code=secrets.token_urlsafe(32);expiry=now+timedelta(seconds=CM_TICKET_SECONDS)
+        cm_diag_record('launch','ticket_issued',trace_id=hashlib.sha256(code.encode()).hexdigest()[:16],menu_id=item['menu_id'],stage=item['source_app'])
         modes=item.get('mode_options') or ['challenge']; mode='challenge' if 'challenge' in modes else 'learn'
         payload.append({'ticket_hash':hashlib.sha256(code.encode()).hexdigest(),'profile_id':profile,
             'source_app':item['source_app'],'expires_at':expiry.isoformat(), 'plan_item_id':item['plan_item_id'],
@@ -2964,7 +2970,7 @@ def cm_plan_items_html(items, links=None):
         badge='<span class="cm-plan-finished" role="status">🌸 達成済み</span>' if done else ''
         if item.get('plan_item_id') in links:
             button_label='再チャレンジ' if retry else ('つづける' if count else 'はじめる')
-            action='<a class="cm-plan-launch'+(' cm-plan-retry' if retry else '')+'" data-source="'+html.escape(item['source_app'])+'" aria-label="'+source+'・'+label+'を'+button_label+'" href="'+html.escape(links[item['plan_item_id']],quote=True)+'" target="_blank" rel="noopener noreferrer">'+button_label+('' if retry else ' <span aria-hidden="true">↗</span>')+'</a>'
+            action='<a class="cm-plan-launch'+(' cm-plan-retry' if retry else '')+'" data-menu="'+html.escape(item['menu_id'],quote=True)+'" data-source="'+html.escape(item['source_app'])+'" aria-label="'+source+'・'+label+'を'+button_label+'" href="'+html.escape(links[item['plan_item_id']],quote=True)+'" target="_blank" rel="noopener noreferrer">'+button_label+('' if retry else ' <span aria-hidden="true">↗</span>')+'</a>'
         elif done:
             action=''
         else:
@@ -3055,6 +3061,12 @@ def render_daily_plan(apps):
     if (st.session_state.get('cm_receipt_jump') or {}).get('place')=='plan':cm_receipt_jump_ui()
 
 
+def cm_server_log_download(place):
+    rows=cm_diag_state()['records']
+    data={'schema_version':2,'log_type':'chokomana_server_operations','source_app':'hub','coverage':{'server':True,'browser':False},'exported_at':datetime.now(timezone.utc).isoformat(),'records':rows}
+    st.download_button('通信ログを保存（補助）',data=json.dumps(data,ensure_ascii=False,indent=2),file_name='chokomana_hub_server_log.json',mime='application/json',key='cm_server_log_'+place)
+
+
 def cm_diag_html():
     return r'''<!doctype html><html lang="ja"><head><meta charset="utf-8"><style>
 *{box-sizing:border-box}body{margin:0;background:transparent;color:#233c3c;font:14px system-ui,-apple-system,'Noto Sans JP',sans-serif}
@@ -3062,6 +3074,75 @@ button{width:100%;min-height:48px;padding:10px 16px;border:1px solid #287466;bor
 button:hover{background:#215e53}button:focus-visible{outline:3px solid #86b5a3;outline-offset:2px}
 #result{font-size:12px;line-height:1.7;color:#61756e;margin:8px 0 0}
 </style></head><body><button id="download" type="button" hidden>動作ログ出力</button><p id="result" role="status" hidden></p><script>
+(function(cfg){
+'use strict';
+let w=window,d=document;
+if(cfg.parent){try{w=parent;d=w.document}catch{w=window;d=document}}
+if(w.__cmUxDiagnosticsV2){w.__cmUxDiagnosticsV2.mount();return}
+const LIMIT=1500,KEY='cm_ux_v2:'+cfg.source,BUILD='20261121.ux2';
+let rows=[],dropped=0,storage='available',timer=null,pending=null,quiet=null;
+const id=()=>w.crypto?.randomUUID?.()||Math.random().toString(36).slice(2)+Date.now();
+const clean=v=>String(v||'').replace(/https?:\/\/[^\s<>"']+/g,'[url]').replace(/(?:Bearer\s+\S+|sb_(?:secret|publishable)_\S+|eyJ[\w.-]+)/gi,'[token]').replace(/\b[a-f0-9]{24,}\b/gi,'[id]').replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi,'[email]').slice(0,140);
+try{const old=JSON.parse(w.localStorage.getItem(KEY)||'null');if(Array.isArray(old?.records)){rows=old.records.slice(-LIMIT);dropped=old.dropped||0}}catch{storage='unavailable'}
+function persist(){timer=null;try{w.localStorage.setItem(KEY,JSON.stringify({records:rows,dropped}))}catch{storage='unavailable'}}
+function log(kind,action,details={}){
+ const r={id:id(),at:new Date().toISOString(),origin:'browser',source_app:cfg.source,build:BUILD,kind,action:clean(action)};
+ for(const k of ['status','duration_ms','action_id','trace_id','menu_id','stage','http_status','method','endpoint','width','height','overflow_px','error_type','line','response_count','metric'])if(details[k]!==undefined)r[k]=typeof details[k]==='string'?clean(details[k]):details[k];
+ rows.push(r);if(rows.length>LIMIT){dropped+=rows.length-LIMIT;rows.splice(0,rows.length-LIMIT)}if(!timer)timer=w.setTimeout(persist,1000);return r;
+}
+function box(){return {width:w.innerWidth,height:w.innerHeight,overflow_px:Math.max(0,d.documentElement.scrollWidth-w.innerWidth)}}
+function paint(fn){w.requestAnimationFrame(()=>w.requestAnimationFrame(fn))}
+function response(stage,explicit=false){
+ const p=pending;if(!p)return;
+ if(!p.first){p.first=true;paint(()=>{if(pending===p)log('first_response',p.action,{action_id:p.id,duration_ms:Math.round(w.performance.now()-p.start),stage,metric:'first_visible_change_plus_two_frames'})})}
+ w.clearTimeout(quiet);quiet=w.setTimeout(()=>{
+  if(pending!==p||p.network||p.bridge)return;
+  paint(()=>{if(pending!==p)return;log('response_settled',p.action,{action_id:p.id,duration_ms:Math.round(w.performance.now()-p.start),stage,status:explicit?'render_callback_observed':'dom_quiet_estimate',metric:'dom_quiet_180ms_plus_two_frames',response_count:p.changes,...box()});pending=null})
+ },180);
+}
+function intent(e){const t=e.target?.closest?.('button,a,input[type=range],select');if(!t||t.disabled||t.closest('[data-cm-ux-control]'))return;
+ if(t.matches('input[type=range]')&&e.type==='click')return;
+ if(pending)log('action_interrupted',pending.action,{action_id:pending.id,status:'superseded'});
+ const action=t.id||t.getAttribute('aria-label')||t.textContent?.trim()||t.tagName;
+ const p={id:id(),action:clean(action),start:w.performance.now(),first:false,changes:0,network:0,bridge:false};pending=p;
+ const a=t.closest('a');let trace=null;try{if(a)trace=new URL(a.href,w.location.href).searchParams.get('cm_trace')}catch{}
+ log('intent',action,{action_id:p.id,trace_id:/^[a-f0-9]{16}$/.test(trace||'')?trace:undefined,menu_id:t.dataset?.menu,...box()});
+ if(a&&a.target==='_blank'){log('external_launch',cfg.source,{action_id:p.id,trace_id:trace,status:'destination_not_observed_in_this_tab'});pending=null;return}
+ w.setTimeout(()=>{if(pending===p){log('response_timeout',p.action,{action_id:p.id,duration_ms:Math.round(w.performance.now()-p.start),status:p.first?'final_response_unconfirmed':'no_visible_response',...box()});pending=null}},20000);
+}
+d.addEventListener('click',intent,true);d.addEventListener('change',intent,true);
+const obs=new w.MutationObserver(list=>{
+ if(list.every(x=>x.target?.closest?.('[data-cm-ux-control]')))return;
+ if(pending){pending.changes++;response('dom_change')}mount();
+});
+function attach(){if(d.body)obs.observe(d.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['hidden','class','disabled','aria-busy']});mount()}
+function safePath(url){try{return new URL(url,w.location.href).pathname.replace(/[a-f0-9-]{24,}/gi,'[id]').slice(0,100)}catch{return '[unknown]'}}
+const originalFetch=w.fetch;
+if(originalFetch)w.fetch=async function(input,options){const p=pending,began=w.performance.now(),path=safePath(typeof input==='string'?input:input?.url);if(p)p.network++;
+ try{const result=await originalFetch.apply(this,arguments);log('network','fetch',{endpoint:path,method:options?.method||input?.method||'GET',http_status:result.status,duration_ms:Math.round(w.performance.now()-began),action_id:p?.id,status:result.ok?'ok':'error'});return result}
+ catch(e){log('network','fetch',{endpoint:path,duration_ms:Math.round(w.performance.now()-began),action_id:p?.id,status:'error',error_type:e?.name});throw e}
+ finally{if(p&&pending===p){p.network--;response('network_finished')}}
+};
+w.addEventListener('error',e=>log('browser_error','uncaught',{error_type:e.error?.name||'resource_error',line:e.lineno,status:'error'}),true);
+w.addEventListener('unhandledrejection',e=>log('browser_error','promise_rejection',{error_type:e.reason?.name||'Error',status:'error'}));
+w.addEventListener('resize',()=>log('viewport','resize',box()));w.addEventListener('pagehide',persist);
+try{new w.PerformanceObserver(l=>{for(const e of l.getEntries())log('long_task','main_thread',{duration_ms:Math.round(e.duration)})}).observe({type:'longtask',buffered:true})}catch{}
+function receive(e){if(e.source!==parent||e.data?.type!=='streamlit:render')return;
+ const a=e.data.args||{},r=a.response||a.result||a.ack||a.stamp_result;
+ for(const row of a.ux_server_records||[])if(row?.id&&!rows.some(x=>x.id===row.id)){rows.push(row);if(rows.length>LIMIT){rows.shift();dropped++}}
+ if(a.ux_launch)log('launch','server_stage',a.ux_launch);
+ if(a.plan_launch)log('launch','assignment_received',{trace_id:a.plan_launch.nonce?.slice(0,16),menu_id:a.plan_launch.menu_id,status:'received'});
+ if(pending){pending.bridge=false;response(r?.ok===false?'server_error':'server_render')}
+}
+window.addEventListener('message',receive);
+function sent(value){if(pending){pending.bridge=true;log('bridge','request',{action_id:pending.id,stage:value?.action||value?.type||'state'})}}
+function ready(stage){response(stage,true)}
+function download(){log('export','ux_log');persist();const blob=new Blob([JSON.stringify({schema_version:2,log_type:'chokomana_ui_ux',source_app:cfg.source,build:BUILD,exported_at:new Date().toISOString(),retention:{max_records:LIMIT,dropped,storage},coverage:{intent:true,first_response:true,settled_dom_estimate:true,exact_paint_or_task_completion:false,server_records:rows.some(r=>r.origin==='server')},environment:box(),records:rows},null,2)],{type:'application/json'});const url=w.URL.createObjectURL(blob),a=d.createElement('a');a.href=url;a.download='chokomana_'+cfg.source+'_ux_'+Date.now()+'.json';a.dataset.cmUxControl='';d.body.append(a);a.click();a.remove();w.setTimeout(()=>w.URL.revokeObjectURL(url),1000)}
+function mount(){if(cfg.mount===false||!d.body||d.getElementById('cmUxLogDownload'))return;const b=d.createElement('button');b.id='cmUxLogDownload';b.dataset.cmUxControl='';b.type='button';b.textContent='動作ログ';b.setAttribute('aria-label','UI・応答速度・エラーの動作ログを保存');b.style.cssText='font:12px system-ui;min-height:30px;padding:4px 9px;border:1px solid #becdca;border-radius:8px;background:#fff;color:#315f65;z-index:18000;flex:none';b.onclick=download;const nav=d.querySelector('.cm-hub-nav-inner,.top,.topbar,header');if(nav){nav.append(b)}else{b.style.position='fixed';b.style.right='8px';b.style.top='8px';d.body.append(b)}}
+w.__cmUxDiagnosticsV2={log,ready,sent,mount,download,get records(){return rows},get dropped(){return dropped}};
+if(d.readyState==='loading')d.addEventListener('DOMContentLoaded',attach,{once:true});else attach();log('lifecycle','module_ready',box());
+})({"source": "hub", "parent": true, "mount": false});
+
 (()=>{'use strict';
 const LIMIT=2000,STORE='chokomana_operation_log_v1';let diag=null,parentAccess=true;
 function makeID(){return globalThis.crypto?.randomUUID?.()||Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)}
@@ -3102,7 +3183,7 @@ function init(p,d){
     const cls=anchor.className||'';let source=anchor.getAttribute?.('data-source')||['soroban','kotoba','geometry','english','moji','reading'].find(s=>cls.includes('cm-subject-'+s));
     // For native link buttons, infer app ONLY from the registered fixed title labels.
     if(!source){const label=(anchor.textContent||'').trim();source=label.startsWith('そろばん')?'soroban':label.startsWith('こくご')?'kotoba':label.startsWith('ずけい')?'geometry':label.startsWith('えいご')?'english':label.startsWith('もじ')?'moji':'app'}
-    state.add('external_app_open',source,{status:'destination_display_unmeasured'});state.persist();return;
+    let trace;try{trace=new URL(anchor.href).searchParams.get('cm_trace')}catch{}state.add('external_app_open',source,{status:'destination_display_unmeasured',trace_id:trace||null,menu_id:anchor.getAttribute('data-menu')||null});state.persist();return;
    }
    let action=null;
    for(const key of Object.keys(state.controls)){if(target.closest('.st-key-'+p.CSS.escape(key))){action=key;break}}
@@ -3132,7 +3213,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'40';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'41';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
@@ -3141,7 +3222,7 @@ window.addEventListener('message',event=>{
 download.addEventListener('click',()=>{
  diag.add('export','operation_log',{status:'download_requested'});diag.persist();
  let p;try{p=parentAccess?parent:window}catch(e){p=window}
- const records=[...diag.records].sort((a,b)=>String(a.at).localeCompare(String(b.at)));
+ const records=[...diag.records,...(p.__cmUxDiagnosticsV2?.records||[])].sort((a,b)=>String(a.at).localeCompare(String(b.at)));
  const bundle={schema_version:1,log_type:'chokomana_operations',app_version:appVersion,
   exported_at:new Date().toISOString(),record_count:records.length,
   retention:{max_records:LIMIT,browser_dropped:diag.dropped,server_dropped:serverDropped},
