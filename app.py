@@ -1019,6 +1019,16 @@ CM_TRAIN_SYMBOLS = {
         "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"
     ]
 }
+CM_TRAIN_REPRESENTATIVES = {
+    "yamanote": "yamanote/e235-01",
+    "chuo_rapid": "chuo_rapid/e233-t-01",
+    "chuo_sobu": "chuo_sobu/e231-500-01",
+    "keihin_tohoku": "keihin_tohoku/e233-1000-01",
+    "shonan_shinjuku": "shonan_shinjuku/e233-3000-01",
+    "sotetsu": "sotetsu/20000-01",
+}
+CM_TRAIN_REEL_STOPS = (1120, 1530, 1950)
+CM_TRAIN_REEL_ROUNDS = (2, 3, 4)
 CM_TRAIN_LINES = {
     "top": (1, 2, 3), "middle": (4, 5, 6), "bottom": (7, 8, 9),
     "down": (1, 5, 9), "up": (7, 5, 3),
@@ -1039,16 +1049,37 @@ CM_TRAIN_STYLE = """<style>
 }
 .cm-train-machine{max-width:31rem;margin:0 auto 12px;padding:12px 16px;background:#10263e;
   border:2px solid #2e5471;border-radius:20px;color:#fff;box-shadow:0 5px 14px #0a223423}
-.cm-train-grid{position:relative;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
-.cm-train-cell,.cm-train-placeholder{display:grid;place-items:center;aspect-ratio:1.55;
-  min-height:2.85rem;overflow:hidden;background:#ecf4f7;border:2px solid #7091a4;border-radius:9px}
+.cm-train-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.cm-train-window{position:relative;overflow:hidden;aspect-ratio:.52;min-height:9rem}
+.cm-train-track{display:flex;flex-direction:column;gap:0;
+  height:calc(100% * var(--items) / 3);transform:translateY(0)}
+.cm-train-cell{box-sizing:border-box;flex:1 1 0;min-height:0;display:grid;padding:3px 0}
+.cm-train-face,.cm-train-placeholder{display:grid;place-items:center;min-height:0;
+  overflow:hidden;background:#ecf4f7;border:2px solid #7091a4;border-radius:9px}
 .cm-train-placeholder{color:#476a80;font-size:clamp(17px,4vw,25px);background:#e2edf1}
-.cm-train-cell.cm-train-match{background:#fff1b6;border-color:#ca8a16;box-shadow:inset 0 0 0 1px #d6a336}
-.cm-train-cell img,.cm-train-card img{display:block;width:90%;height:85%;object-fit:contain}
-.cm-train-reveal img{animation:cm-train-reel .42s cubic-bezier(.2,.6,.3,1) both;animation-delay:var(--delay)}
-@keyframes cm-train-reel{
-  from{transform:translateY(-85%);filter:blur(4px);opacity:0}
-  to{transform:translateY(0);filter:blur(0);opacity:1}
+.cm-train-face img,.cm-train-card img{display:block;width:90%;height:85%;object-fit:contain}
+.cm-train-art{width:92%;height:100%;background:var(--symbol) center/contain no-repeat}
+.cm-train-match .cm-train-face{background:#fff1b6;border-color:#ca8a16;
+  box-shadow:inset 0 0 0 1px #d6a336}
+.cm-train-reveal .cm-train-track{animation:cm-train-roll var(--stop) linear both}
+.cm-train-spinning .cm-train-track{animation:cm-train-loop 510ms linear infinite}
+.cm-train-spin-note,.cm-train-reveal .cm-train-message{grid-area:1/1}
+.cm-train-reveal .cm-train-message{animation:cm-train-show 1ms step-end var(--finish) both}
+.cm-train-reveal .cm-train-spin-note{animation:cm-train-hide 1ms step-end var(--finish) both}
+.cm-train-reveal .cm-train-result{display:grid;justify-items:center;align-items:center}
+.cm-train-reveal .cm-train-match .cm-train-face{
+  animation:cm-train-highlight 200ms ease-out var(--finish) both}
+@keyframes cm-train-roll{
+  0%{transform:translateY(var(--start));animation-timing-function:cubic-bezier(.12,.09,.67,.54)}
+  65%{transform:translateY(var(--brake));animation-timing-function:cubic-bezier(.12,.56,.38,1)}
+  100%{transform:translateY(0)}
+}
+@keyframes cm-train-loop{from{transform:translateY(var(--start))}to{transform:translateY(0)}}
+@keyframes cm-train-show{from{visibility:hidden}to{visibility:visible}}
+@keyframes cm-train-hide{from{visibility:visible}to{visibility:hidden}}
+@keyframes cm-train-highlight{
+  from{background:#ecf4f7;border-color:#7091a4;box-shadow:none}
+  to{background:#fff1b6;border-color:#ca8a16;box-shadow:inset 0 0 0 1px #d6a336}
 }
 .cm-train-result{text-align:center;color:#f4f8fc;font-size:clamp(.82rem,3.4vw,1rem);font-weight:750;margin-top:9px}
 .cm-train-collection{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:8px}
@@ -1057,7 +1088,11 @@ CM_TRAIN_STYLE = """<style>
   text-align:center;font-size:.78rem;line-height:1.25;min-width:0}
 .cm-train-card strong{font-size:.81rem}
 .cm-train-card span{margin-top:4px;color:#284e69}
-@media(prefers-reduced-motion:reduce){.cm-train-reveal img{animation:none}}
+@media(prefers-reduced-motion:reduce){
+  .cm-train-reveal .cm-train-track,.cm-train-spinning .cm-train-track,
+  .cm-train-reveal .cm-train-match .cm-train-face,.cm-train-reveal .cm-train-message{animation:none}
+  .cm-train-reveal .cm-train-spin-note{display:none}
+}
 </style>"""
 
 
@@ -1069,34 +1104,71 @@ def cm_train_request(operation, profile, **values):
                           payload={"p_profile": profile, **values})
 
 
-def cm_train_board(result, animate):
-    board = (result or {}).get("board") or []
-    if len(board) != 9:
-        cells = '<div class="cm-train-placeholder" aria-hidden="true">・</div>' * 9
-        message = "メダルをえらんで まわそう"
+def cm_train_reel_cell(train=None, *, matched=False, decorative=False):
+    line = str(train or "").partition("/")[0]
+    representative = CM_TRAIN_REPRESENTATIVES.get(line)
+    if representative:
+        label = html.escape(" ".join(CM_TRAIN_SYMBOLS[representative][:2]), quote=True)
+        accessibility = 'aria-hidden="true"' if decorative else f'role="img" aria-label="{label}"'
+        face = (f'<div class="cm-train-face"><span class="cm-train-art" {accessibility} '
+                f'style="--symbol:var(--train-{line})"></span></div>')
+    elif train:
+        face = '<div class="cm-train-face"><span aria-label="電車">🚃</span></div>'
     else:
-        winning = {index for line in result.get("winning_lines", ()) for index in CM_TRAIN_LINES.get(line, ())}
-        output = []
-        for i, train in enumerate(board, 1):
-            info = CM_TRAIN_SYMBOLS.get(train)
-            tag = " cm-train-match" if i in winning else ""
-            image = (f'<img src="data:image/webp;base64,{info[2]}" alt="{html.escape(info[0] + " " + info[1])}">'
-                     if info else '<span aria-label="電車">🚃</span>')
-            output.append(f'<div class="cm-train-cell{tag}" style="--delay:{((i - 1) % 3) * 110}ms">{image}</div>')
-        cells = "".join(output)
-        awarded = CM_TRAIN_SYMBOLS.get(result.get("prize_train"))
+        face = '<div class="cm-train-placeholder" aria-hidden="true">・</div>'
+    state = " cm-train-match" if matched else ""
+    return f'<div class="cm-train-cell{state}">{face}</div>'
+
+
+def cm_train_board(result, animate=False, *, spinning=False):
+    board = (result or {}).get("board") or []
+    complete = len(board) == 9
+    animate = animate and complete
+    winning = set()
+    if complete:
+        winning = {index - 1 for line in result.get("winning_lines", ()) for index in CM_TRAIN_LINES.get(line, ())}
+        awarded = CM_TRAIN_REPRESENTATIVES.get(str(result.get("prize_train") or "").partition("/")[0])
         grade = GRADE_NAMES[result["grade"]]
         if awarded:
-            train_name = html.escape(" ".join(awarded[:2]))
-            message = f"{grade}メダルで あたり！ {train_name}"
+            name = html.escape(CM_TRAIN_SYMBOLS[awarded][0])
+            message = f"{grade}メダルで あたり！ {name}"
         elif result.get("prize_train"):
             message = f"{grade}メダルで あたり！ 電車メダルをゲット"
         else:
             message = f"{grade}メダルで ざんねん。つぎは そろうかな？"
-    motion = " cm-train-reveal" if animate else ""
-    return (f'<section class="cm-train-machine{motion}" aria-label="ルーレットの結果">'
-            f'<div class="cm-train-grid">{cells}</div><div class="cm-train-result" role="status">'
-            f'{message}</div></section>')
+    else:
+        message = "くるくる まわっているよ…" if spinning else "メダルをえらんで まわそう"
+
+    train_keys = tuple(CM_TRAIN_REPRESENTATIVES.values())
+    windows = []
+    for column, (stop, rounds) in enumerate(zip(CM_TRAIN_REEL_STOPS, CM_TRAIN_REEL_ROUNDS)):
+        indices = range(column, 9, 3)
+        sequence = train_keys[column:] + train_keys[:column]
+        if spinning:
+            # Identical first and last frames make the waiting loop continuous.
+            cells = [cm_train_reel_cell(train, decorative=True) for train in sequence + sequence[:3]]
+        else:
+            cells = [cm_train_reel_cell(board[i] if complete else None, matched=i in winning)
+                     for i in indices]
+            if animate:
+                cells.extend(cm_train_reel_cell(train, decorative=True) for train in sequence * rounds)
+        travel = (len(cells) - 3) * 100 / len(cells)
+        styles = (f"--items:{len(cells)};--start:{-travel:.6f}%;"
+                  f"--brake:{-travel * .22:.6f}%;--stop:{stop}ms")
+        windows.append(f'<div class="cm-train-window"><div class="cm-train-track" style="{styles}">'
+                       f'{"".join(cells)}</div></div>')
+
+    artwork = "".join(
+        f"--train-{line}:url(data:image/webp;base64,{CM_TRAIN_SYMBOLS[key][2]});"
+        for line, key in CM_TRAIN_REPRESENTATIVES.items()
+    ) if complete or spinning else ""
+    motion = " cm-train-reveal" if animate else " cm-train-spinning" if spinning else ""
+    progress = '<span class="cm-train-spin-note" aria-hidden="true">くるくる まわっているよ…</span>' if animate else ""
+    return (f'<section class="cm-train-machine{motion}" aria-label="電車ルーレット" '
+            f'style="--finish:{CM_TRAIN_REEL_STOPS[-1]}ms;{artwork}">'
+            f'<div class="cm-train-grid">{"".join(windows)}</div>'
+            f'<div class="cm-train-result" role="status">{progress}'
+            f'<span class="cm-train-message">{message}</span></div></section>')
 
 
 def cm_train_collection(collection):
@@ -1124,20 +1196,22 @@ def cm_train_queue(profile, grade):
 
 def render_train_roulette(profile):
     st.markdown('<div class="cm-page-heading">電車ルーレット</div>', unsafe_allow_html=True)
+    board_slot = st.empty()
     pending = st.session_state.get("cm_train_pending")
     spin = None
     notice = None
     if pending and pending["profile"] == profile:
         try:
-            with st.spinner("電車が くるよ…"):
-                spin = cm_train_request("cm_train_spin", profile, p_grade=pending["grade"],
-                                        p_request_id=pending["id"])
+            board_slot.markdown(cm_train_board(None, spinning=True), unsafe_allow_html=True)
+            spin = cm_train_request("cm_train_spin", profile, p_grade=pending["grade"],
+                                    p_request_id=pending["id"])
             if spin.get("status") not in ("ok", "no_medal"):
                 raise RuntimeError("Unexpected roulette result")
             st.session_state.pop("cm_train_pending", None)
             if spin["status"] == "no_medal":
                 notice = "その色で使えるメダルがありません。"
         except Exception as exc:
+            board_slot.markdown(cm_train_board(None), unsafe_allow_html=True)
             cm_diag_record("roulette_error", "train_spin", status="error", error=exc)
             cm_error("ルーレットの結果を確認できませんでした。")
             if cm_button("同じ抽選を確認する", key="cm_train_retry", use_container_width=True):
@@ -1148,15 +1222,16 @@ def render_train_roulette(profile):
         overview = spin["overview"] if spin else cm_train_request("cm_train_overview", profile)
     except Exception as exc:
         cm_diag_record("roulette_error", "train_overview", status="error", error=exc)
-        if spin and spin["status"] == "ok":
-            st.markdown(cm_train_board(spin, True), unsafe_allow_html=True)
+        saved = spin if spin and spin["status"] == "ok" else None
+        board_slot.markdown(cm_train_board(saved, bool(saved)), unsafe_allow_html=True)
         cm_error("メダルの枚数を読み込めませんでした。")
         if cm_button("メダルを読み込み直す", key="cm_train_refresh", use_container_width=True):
             st.rerun()
         return
 
     new_result = spin if spin and spin["status"] == "ok" else None
-    st.markdown(cm_train_board(new_result or overview.get("latest"), bool(new_result)), unsafe_allow_html=True)
+    board_slot.markdown(cm_train_board(new_result or overview.get("latest"), bool(new_result)),
+                        unsafe_allow_html=True)
     if notice:
         st.info(notice)
     st.caption("メダル1まいで 1かい。ボタンの下は、あたりになる列だよ。")
