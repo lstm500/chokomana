@@ -1690,6 +1690,15 @@ CM_TRAIN_STYLE = """<style>
   min-width:0;width:100%!important
 }
 .st-key-cm_navigation button,.st-key-cm_train_buttons button{min-height:44px;padding:.25rem .4rem}
+.st-key-cm_train_buttons button{background:#f8fcff!important;color:#183f5e!important;border-color:#91afc3!important}
+.st-key-cm_train_buttons button:disabled{background:#e8eef2!important;color:#4e5d69!important;opacity:1!important}
+.st-key-cm_train_continue button,.st-key-cm_train_retry button,.st-key-cm_train_refresh button{
+  min-height:44px;background:#18466b!important;color:#fff!important;border-color:#18466b!important
+}
+:is(.st-key-cm_train_buttons,.st-key-cm_train_continue,.st-key-cm_train_retry,.st-key-cm_train_refresh) button p{
+  color:inherit!important
+}
+.st-key-cm_train_buttons button:hover:not(:disabled){background:#e4f1fa!important}
 @media(max-width:530px){
   .st-key-cm_navigation [data-testid=stHorizontalBlock]{grid-template-columns:repeat(3,minmax(0,1fr))}
   .st-key-cm_train_buttons [data-testid=stHorizontalBlock]{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -1710,9 +1719,7 @@ CM_TRAIN_STYLE = """<style>
   box-shadow:inset 0 0 0 1px #d6a336}
 .cm-train-reveal .cm-train-track{animation:cm-train-roll var(--stop) linear both}
 .cm-train-spinning .cm-train-track{animation:cm-train-loop 510ms linear infinite}
-.cm-train-spin-note,.cm-train-reveal .cm-train-message{grid-area:1/1}
 .cm-train-reveal .cm-train-message{animation:cm-train-show 1ms step-end var(--finish) both}
-.cm-train-reveal .cm-train-spin-note{animation:cm-train-hide 1ms step-end var(--finish) both}
 .cm-train-reveal .cm-train-result{display:grid;justify-items:center;align-items:center}
 .cm-train-reveal .cm-train-match .cm-train-face{
   animation:cm-train-highlight 200ms ease-out var(--finish) both}
@@ -1723,7 +1730,6 @@ CM_TRAIN_STYLE = """<style>
 }
 @keyframes cm-train-loop{from{transform:translateY(var(--start))}to{transform:translateY(0)}}
 @keyframes cm-train-show{from{opacity:0;visibility:hidden}to{opacity:1;visibility:visible}}
-@keyframes cm-train-hide{from{opacity:1;visibility:visible}to{opacity:0;visibility:hidden}}
 @keyframes cm-train-highlight{
   from{background:#ecf4f7;border-color:#7091a4;box-shadow:none}
   to{background:#fff1b6;border-color:#ca8a16;box-shadow:inset 0 0 0 1px #d6a336}
@@ -1784,7 +1790,6 @@ CM_TRAIN_STYLE = """<style>
   .cm-train-reveal .cm-train-track,.cm-train-spinning .cm-train-track,
   .cm-train-reveal .cm-train-match .cm-train-face,.cm-train-reveal .cm-train-message,
   .cm-train-prize[open]{animation:none}
-  .cm-train-reveal .cm-train-spin-note{display:none}
 }
 </style>"""
 
@@ -1832,6 +1837,7 @@ def cm_train_prize_popup(train):
 def cm_train_board(result, animate=False, *, spinning=False):
     board = (result or {}).get("board") or []
     complete = len(board) == 9
+    spinning = spinning and not complete
     animate = animate and complete
     winning = set()
     prize = result.get("prize_train") if complete else None
@@ -1875,12 +1881,11 @@ def cm_train_board(result, animate=False, *, spinning=False):
         for line, key in CM_TRAIN_REPRESENTATIVES.items()
     ) if complete or spinning else ""
     motion = " cm-train-reveal" if animate else " cm-train-spinning" if spinning else ""
-    progress = '<span class="cm-train-spin-note" aria-hidden="true">くるくる まわっているよ…</span>' if animate else ""
     popup = cm_train_prize_popup(prize) if animate and prize in CM_TRAIN_SYMBOLS else ""
     return (f'<section class="cm-train-machine{motion}" aria-label="電車ルーレット" '
             f'style="--finish:{CM_TRAIN_REEL_STOPS[-1]}ms;{artwork}">'
             f'<div class="cm-train-grid">{"".join(windows)}</div>'
-            f'<div class="cm-train-result" role="status">{progress}'
+            f'<div class="cm-train-result" role="status">'
             f'<span class="cm-train-message">{message}</span></div>{popup}</section>')
 
 
@@ -1927,16 +1932,26 @@ def cm_train_queue(profile, grade, previous_id=None):
             and not st.session_state.get("cm_train_pending")):
         st.session_state["cm_train_pending"] = {
             "profile": profile, "grade": grade, "id": str(uuid4()), "previous_id": previous_id,
+            "send": True,
         }
+
+
+def cm_train_retry(profile):
+    pending = st.session_state.get("cm_train_pending")
+    if pending and pending["profile"] == profile:
+        pending["send"] = True
 
 
 def render_train_roulette(profile):
     st.markdown('<div class="cm-page-heading">電車ルーレット</div>', unsafe_allow_html=True)
     board_slot = st.empty()
     pending = st.session_state.get("cm_train_pending")
+    if pending and pending["profile"] != profile:
+        pending = None
     spin = None
     notice = None
-    if pending and pending["profile"] == profile:
+    if pending and pending.get("send", True):
+        pending["send"] = False
         try:
             board_slot.markdown(cm_train_board(None, spinning=True), unsafe_allow_html=True)
             spin = cm_train_request("cm_train_spin_v3", profile, p_grade=pending["grade"],
@@ -1944,6 +1959,8 @@ def render_train_roulette(profile):
                                     p_train_catalog=list(CM_TRAIN_SYMBOLS))
             if spin.get("status") not in ("ok", "no_medal", "round_in_progress", "no_round", "round_changed"):
                 raise RuntimeError("Unexpected roulette result")
+            if not isinstance(spin.get("overview"), dict):
+                raise RuntimeError("Missing roulette overview")
             st.session_state.pop("cm_train_pending", None)
             if spin["status"] == "no_medal":
                 notice = "その色で使えるメダルがありません。"
@@ -1954,12 +1971,25 @@ def render_train_roulette(profile):
             elif spin["status"] == "round_changed":
                 notice = "ルーレットの つづきが こうしんされたよ。"
         except Exception as exc:
-            board_slot.markdown(cm_train_board(None), unsafe_allow_html=True)
             cm_diag_record("roulette_error", "train_spin", status="error", error=exc)
-            cm_error("ルーレットの結果を確認できませんでした。")
-            if cm_button("同じ抽選を確認する", key="cm_train_retry", use_container_width=True):
-                st.rerun()
-            return
+            spin = None
+            st.session_state["cm_train_pending"]["failure"] = (
+                "connection" if re.search(r"HTTP (401|403|404)\b", str(exc)) else "result")
+
+    if pending and spin is None:
+        failure = pending.get("failure")
+        try:
+            current = cm_train_request("cm_train_overview_v3", profile)
+            latest = current.get("latest")
+        except Exception as exc:
+            cm_diag_record("roulette_error", "train_overview_after_spin", status="error", error=exc)
+            latest = None
+        board_slot.markdown(cm_train_board(latest), unsafe_allow_html=True)
+        cm_error("ルーレットの接続設定を確認してください。" if failure == "connection"
+                 else "ルーレットの結果を確認できませんでした。")
+        cm_button("同じ抽選を確認する", key="cm_train_retry", use_container_width=True,
+                  on_click=cm_train_retry, args=(profile,))
+        return
 
     try:
         overview = spin["overview"] if spin else cm_train_request("cm_train_overview_v3", profile)
