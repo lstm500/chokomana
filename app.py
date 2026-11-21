@@ -1984,6 +1984,10 @@ CM_TRAIN_STYLE = """<style>
   min-width:0;width:100%!important
 }
 .st-key-cm_navigation button,.st-key-cm_train_buttons button{min-height:44px;padding:.25rem .4rem}
+.stApp .st-key-cm_train_continue button:enabled:is(:hover,:focus-visible),
+.stApp .st-key-cm_train_buttons button:enabled:is(:hover,:focus-visible){
+  background:#215e53!important;border-color:#215e53!important;color:#fff!important
+}
 @media(max-width:530px){
   .st-key-cm_navigation [data-testid=stHorizontalBlock]{grid-template-columns:repeat(3,minmax(0,1fr))}
   .st-key-cm_train_buttons [data-testid=stHorizontalBlock]{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -2133,17 +2137,7 @@ def cm_train_board(result, animate=False, *, spinning=False):
     prize = result.get("prize_train") if complete else None
     if complete:
         winning = {index - 1 for line in result.get("winning_lines", ()) for index in CM_TRAIN_LINES.get(line, ())}
-        awarded = CM_TRAIN_REPRESENTATIVES.get(str(prize or "").partition("/")[0])
-        grade = GRADE_NAMES[result["grade"]]
-        if awarded:
-            name = html.escape(CM_TRAIN_SYMBOLS[awarded][0])
-            message = f"{grade}メダルで 当たり！ {name}"
-        elif prize:
-            message = f"{grade}メダルで 当たり！ 電車メダルをゲット"
-        else:
-            message = f"{grade}メダルで 残念。"
-        if result.get("round_total", 1) > 1:
-            message = f'{result["round_number"]} / {result["round_total"]}回　{message}'
+        message = "当たり！" if prize else "ざんねん。"
     else:
         message = "くるくる まわっているよ…" if spinning else "メダルをえらんで まわそう"
 
