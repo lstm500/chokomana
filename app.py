@@ -63,7 +63,7 @@ APP_DEFINITIONS = (
 
 # Local diagnostics: bounded timing/error metadata; never request bodies or credentials.
 CM_DIAG_LIMIT = 2000
-CM_DIAG_VERSION = 'operation-log-2-hub45'
+CM_DIAG_VERSION = 'operation-log-2-hub46'
 
 
 def cm_diag_state():
@@ -238,7 +238,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='42', default=None)
+        app_version='46', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -3146,7 +3146,7 @@ if(d.readyState==='loading')d.addEventListener('DOMContentLoaded',attach,{once:t
 function installKotobaLaunchAudio(w,d){
  if(w.__cmKotobaLaunchAudio)return;
  w.__cmKotobaLaunchAudio=true;
- const protocol='chokomana:kotoba-audio:v1';
+ const protocol='chokomana:kotoba-audio:v2';
  let launch=null,active=null,warmup=null;
  const record=(status,extra={})=>w.__cmUxDiagnosticsV2?.log('audio','kotoba_launch',{status,...extra});
  function stop(){
@@ -3154,12 +3154,15 @@ function installKotobaLaunchAudio(w,d){
   const speech=active;
   active=null;
   warmup=null;
-  if(speech)w.clearTimeout(speech.timer);
+  if(speech){
+   w.clearTimeout(speech.timer);
+   speech.port.close();
+  }
   w.speechSynthesis?.cancel();
  }
  function open(event){
   const link=event.target?.closest?.('a.cm-plan-launch[data-source="kotoba"]');
-  if(!link||!event.isTrusted||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
+  if(event.defaultPrevented||!link||!event.isTrusted||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
   let url;
   try{url=new URL(link.href);if(url.protocol!=='https:'||url.username||url.password||!url.searchParams.has('cm_launch'))return}catch{return}
   const nonce=w.crypto.randomUUID();
@@ -3191,28 +3194,28 @@ function installKotobaLaunchAudio(w,d){
   if(!entry||a?.protocol!==protocol||a.nonce!==entry.nonce||event.origin!==entry.origin
      ||!event.source||event.source===entry.child)return;
   try{if(event.source.parent!==entry.child||entry.child.closed)return}catch{return}
-  if(a.type==='cancel'){
-   if(active?.entry===entry&&active.id===a.id&&active.source===event.source)stop();
-   return;
-  }
-  if(entry.used||a.type!=='speak'||a.id!==entry.nonce
+  const port=event.ports?.[0];
+  if(!port||entry.used||a.type!=='speak'||a.id!==entry.nonce
      ||!Array.isArray(a.parts)||a.parts.length<1||a.parts.length>16
      ||a.parts.some(p=>typeof p!=='string'||!p.trim()||p.length>2000)
      ||a.parts.join('').length>3000)return;
   entry.used=true;
   stop();
-  const reply=(status,error)=>event.source.postMessage({protocol,nonce:entry.nonce,id:a.id,status,error},entry.origin);
+  const reply=(status,error)=>port.postMessage({status,error});
   const bounded=(value,min,max,fallback)=>Number.isFinite(value)?Math.min(max,Math.max(min,value)):fallback;
   const settings=a.settings||{};
-  if(!w.speechSynthesis||!w.SpeechSynthesisUtterance){reply('error','unsupported');record('failed',{error_type:'unsupported'});return}
-  const speech={entry,id:a.id,source:event.source,timer:null,utterance:null};
+  if(!w.speechSynthesis||!w.SpeechSynthesisUtterance){
+   reply('error','unsupported');port.close();record('failed',{error_type:'unsupported'});return;
+  }
+  const speech={port,timer:null,utterance:null};
   active=speech;
+  port.onmessage=message=>{if(active===speech&&message.data?.type==='cancel')stop()};
   const voices=w.speechSynthesis.getVoices().filter(v=>/^ja(?:[-_]|$)/i.test(v.lang||''));
   const score=v=>(/Natural|Neural|Premium|Enhanced|Online|オンライン|高品質/i.test(v.name)?100:0)+(/Google.*日本語/i.test(v.name)?60:0)+(/Microsoft/i.test(v.name)?30:0)+(v.default?10:0);
   const voice=voices.find(v=>v.voiceURI===settings.voice)||voices.sort((a,b)=>score(b)-score(a))[0];
   const fail=reason=>{
    if(active!==speech)return;
-   stop();reply('error',reason);record('failed',{error_type:reason});
+   reply('error',reason);stop();record('failed',{error_type:reason});
   };
   function read(i){
    if(active!==speech)return;
@@ -3234,7 +3237,7 @@ function installKotobaLaunchAudio(w,d){
     u.onend=()=>{
      if(active!==speech||speech.utterance!==u)return;
      w.clearTimeout(speech.timer);
-     if(i+1===a.parts.length){active=null;reply('ended');return}
+     if(i+1===a.parts.length){active=null;reply('ended');port.close();return}
      reply('paused');
      speech.timer=w.setTimeout(()=>read(i+1),Math.round(1000*bounded(settings.pause,0,2,.8)));
     };
@@ -3248,7 +3251,19 @@ function installKotobaLaunchAudio(w,d){
  w.addEventListener('message',receive);
  w.addEventListener('pagehide',stop);
 }
-if(window.parent!==window){try{installKotobaLaunchAudio(parent,parent.document)}catch{}}
+if(window.parent!==window){
+ try{
+  const host=window.parent,hostDocument=host.document;
+  if(!host.__cmKotobaLaunchAudio){
+   // Run the listener in the parent document so a Streamlit iframe remount cannot remove it.
+   const script=hostDocument.createElement('script');
+   script.textContent='('+installKotobaLaunchAudio.toString()+')(window,document);';
+   hostDocument.head.append(script);
+   script.remove();
+   if(!host.__cmKotobaLaunchAudio)installKotobaLaunchAudio(host,hostDocument);
+  }
+ }catch{}
+}
 
 (()=>{'use strict';
 const LIMIT=2000,STORE='chokomana_operation_log_v1';let diag=null,parentAccess=true;
