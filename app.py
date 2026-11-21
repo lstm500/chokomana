@@ -2334,7 +2334,7 @@ def render_train_roulette(profile):
 
 def render_navigation() -> None:
     labels = (("home", "ホーム"), ("roulette", "電車ルーレット"), ("today", "今日の成果"),
-              ("history", "過去のスタンプ"), ("inbox", "おうえん・メッセージ"))
+              ("history", "過去のスタンプ"), ("analysis", "分析・管理"))
     with st.container(key="cm_navigation"):
         cols = st.columns(len(labels), gap="small")
         for col, (page, label) in zip(cols, labels):
@@ -2736,6 +2736,9 @@ def main() -> None:
     render_navigation()
     if st.session_state.cm_page == 'inbox':
         render_receipts()
+        return
+    if st.session_state.cm_page == "analysis":
+        render_analysis_management()
         return
     if st.session_state.cm_page == "settings":
         render_settings()
@@ -3146,7 +3149,7 @@ def render_settings():
 
 def cm_clear_account_state():
     for key in list(st.session_state):
-        if key.startswith(("cm_link_", "cm_today_", "cm_history_", "cm_plan_", "cm_email_", "cm_audio_", "cm_medal_volume_", "cm_support_", "cm_receipt_", "cm_train_")) or key in (
+        if key.startswith(("cm_link_", "cm_today_", "cm_history_", "cm_plan_", "cm_email_", "cm_audio_", "cm_medal_volume_", "cm_support_", "cm_receipt_", "cm_train_", "cm_analysis_")) or key in (
             "cm_profile", "cm_account_token", "cm_account_username", "cm_hub_validated_token",
             "cm_change_current", "cm_change_new", "cm_change_confirmation", "cm_password_changed"):
             st.session_state.pop(key, None)
@@ -4252,6 +4255,293 @@ def cm_plan_launch_links(items, apps):
         for ident,cache in pending.items():
             st.session_state[cache['key']]=cache;links[ident]=cache['link']
     return links
+
+
+def cm_analysis_units(catalog, events, stamps, source, profile):
+    """Aggregate first attempts per catalog menu, retaining identifiable historical units."""
+    import unicodedata
+
+    def normalized(value):
+        return ''.join(unicodedata.normalize('NFKC', str(value or '')).split())
+
+    units = {}
+    catalog_labels = {}
+    score_methods = {}
+
+    def unit(key, label, menu_id=None):
+        return units.setdefault(key, {'label': label, 'menu_id': menu_id,
+                                      'correct': 0, 'total': 0, 'attempts': set(), 'last': None})
+
+    def record(entry, attempt, when):
+        entry['attempts'].add(attempt)
+        if when and (entry['last'] is None or entry['last'] < when):
+            entry['last'] = when
+
+    legacy_lookup = {}
+    difficulty_names = {'beginner': '初級', 'intermediate': '中級', 'advanced': '上級',
+                        'expert': '特級', 'master': '名人', '1': '初級', '2': '中級', '3': '上級'}
+    for row in catalog:  # Ordered newest first by the catalog query.
+        if row['source_app'] != source:
+            raise RuntimeError('analysis catalog source mismatch')
+        menu_id = row['entry_id']
+        payload = row.get('payload') or {}
+        label = payload.get('label') or payload.get('category_label') or menu_id
+        catalog_labels.setdefault(menu_id, label)
+        score_methods.setdefault(menu_id, payload.get('assessment_method'))
+        if payload.get('is_active') is not False:
+            difficulty = payload.get('difficulty_id')
+            names = (difficulty, difficulty_names.get(str(difficulty)), label, payload.get('difficulty_label'))
+            for name in names:
+                if payload.get('category_id') and name:
+                    alias = (normalized(payload['category_id']), normalized(name))
+                    legacy_lookup.setdefault(alias, set()).add(menu_id)
+    for menu_id, label in catalog_labels.items():
+        unit(('menu', menu_id), label, menu_id)
+
+    unique = {}
+    for row in events:
+        if row['profile_id'] != profile or row['source_app'] != source:
+            raise RuntimeError('analysis event owner mismatch')
+        unique[row['event_id']] = row
+    rows = sorted(unique.values(), key=lambda row: (
+        cm_plan_date(row['occurred_at']) or datetime.min.replace(tzinfo=timezone.utc),
+        row['sequence'], row['event_id']))
+    starts, items = {}, {}
+    for row in rows:
+        data = row.get('payload') or {}
+        attempt = row['attempt_id']
+        if row['event_type'] == 'session_started' and data.get('menu_id'):
+            menu_id = data['menu_id']
+            label = catalog_labels.get(menu_id) or data.get('menu_label') or menu_id
+            entry = unit(('menu', menu_id), label, menu_id)
+            starts[attempt] = entry
+            record(entry, attempt, cm_plan_date(row['occurred_at']))
+        elif row['event_type'] == 'item_presented' and row.get('occurrence_id'):
+            items[(attempt, row['occurrence_id'])] = data
+
+    seen, detailed_attempts = set(), set()
+    for row in rows:
+        attempt = row['attempt_id']
+        entry = starts.get(attempt)
+        if entry is None or row['event_type'] != 'response_submitted':
+            continue
+        detailed_attempts.add(attempt)
+        data = row.get('payload') or {}
+        occurrence = row.get('occurrence_id')
+        presented = items.get((attempt, occurrence))
+        if (not occurrence or presented is None or presented.get('presentation_kind') == 'retry'
+                or presented.get('parent_occurrence_id') or data.get('response_index') != 1
+                or data.get('response_status') != 'answered' or data.get('assessment_method') != 'automatic'
+                or type(data.get('is_correct')) is not bool):
+            continue
+        key = (attempt, occurrence, data.get('substep_id'))
+        if key in seen:
+            continue
+        seen.add(key)
+        entry['correct'] += int(data['is_correct'])
+        entry['total'] += 1
+        record(entry, attempt, cm_plan_date(row['occurred_at']))
+
+    seen_stamps = set()
+    for row in stamps:
+        if row['profile_id'] != profile or row['source_app'] != source:
+            raise RuntimeError('analysis stamp owner mismatch')
+        attempt = row['attempt_id']
+        if attempt in seen_stamps or row.get('grade') not in GRADE_NAMES:
+            continue
+        seen_stamps.add(attempt)
+        entry = starts.get(attempt)
+        if entry is None:
+            category = row.get('category_key') or row.get('category_label') or '単元不明'
+            difficulty = str(row.get('difficulty') or '')
+            candidates = set()
+            for name in (difficulty, difficulty_names.get(difficulty)):
+                candidates.update(legacy_lookup.get((normalized(category), normalized(name)), ()))
+            if len(candidates) == 1:
+                entry = units[('menu', next(iter(candidates)))]
+            else:
+                label = row.get('category_label') or category
+                if difficulty and normalized(difficulty) not in normalized(label):
+                    label += ' / ' + (difficulty_names.get(difficulty) or difficulty)
+                entry = unit(('legacy', category, difficulty), label)
+        record(entry, attempt, cm_plan_date(row['finished_at']))
+        correct, total = row.get('correct_count'), row.get('total_count')
+        # Historic medals are scored only for apps with automatic quiz grading.
+        if (attempt not in detailed_attempts and source in ('kotoba', 'soroban', 'geometry', 'english', 'geography')
+                and score_methods.get(entry['menu_id']) in (None, 'automatic')
+                and type(correct) is int and type(total) is int and 0 <= correct <= total and total > 0):
+            entry['correct'] += correct
+            entry['total'] += total
+    return units
+
+
+def cm_analysis_load(source, profile):
+    params = {'source_app': 'eq.' + source}
+    catalog = cm_plan_rows('chokomana_learning_catalog', {
+        **params, 'entry_type': 'eq.menu', 'select': 'source_app,entry_id,content_version,payload,published_at',
+        'order': 'published_at.desc.nullslast,entry_id,content_version.desc',
+    })
+    owned = {**params, 'profile_id': 'eq.' + profile}
+    events = cm_plan_rows('chokomana_learning_events', {
+        **owned, 'event_type': 'in.(session_started,item_presented,response_submitted)',
+        'select': 'event_id,profile_id,source_app,attempt_id,event_type,sequence,occurred_at,occurrence_id,payload',
+        'order': 'occurred_at,event_id',
+    })
+    stamps = cm_plan_rows(TABLE_NAME, {
+        **owned, 'select': 'profile_id,source_app,attempt_id,category_key,category_label,difficulty,'
+                           'correct_count,total_count,grade,finished_at',
+        'order': 'finished_at,attempt_id',
+    })
+    return cm_analysis_units(catalog, events, stamps, source, profile)
+
+
+def cm_analysis_certificate(source, menu_id, certify, expected_version):
+    """Write a single unit key in the shared graduation state with optimistic locking."""
+    from uuid import uuid4
+
+    profile = st.session_state['cm_profile']  # main() has just verified the account.
+    if source not in SUBJECT_NAMES or not isinstance(menu_id, str) or not 1 <= len(menu_id) <= 507:
+        raise ValueError('単元を確認できませんでした。')
+    table = '/rest/v1/chokomana_graduation_states'
+    scope = {'profile_id': 'eq.' + profile, 'source_app': 'eq.' + source}
+    key = 'unit:' + menu_id
+    now = datetime.now(timezone.utc).isoformat()
+    record = {'menu_id': menu_id, 'graduated_at': now, 'recognition': 'manual'} if certify else None
+    change = {'version': str(uuid4()), 'record': record}
+
+    for _ in range(4):
+        rows = cm_account_request('GET', table, params={**scope, 'select': 'items,revision', 'limit': '1'})
+        if not isinstance(rows, list):
+            raise RuntimeError('invalid graduation response')
+        items = (rows[0].get('items') or {}) if rows else {}
+        existing = items.get(key) or {}
+        if isinstance(existing.get('record'), dict) == certify:
+            return
+        if existing.get('version') != expected_version:
+            raise ValueError('別の端末で修了認定が変更されました。「記録を更新」から確認してください。')
+        updated = {'items': {**items, key: change}, 'updated_at': now}
+        if rows:
+            revision = rows[0]['revision']
+            result = cm_account_request('PATCH', table, {**updated, 'revision': revision + 1},
+                                        {**scope, 'revision': 'eq.' + str(revision)}, 'return=representation')
+        else:
+            result = cm_account_request('POST', table, {
+                **updated, 'profile_id': profile, 'source_app': source, 'revision': 1,
+            }, {'on_conflict': 'profile_id,source_app'}, 'resolution=ignore-duplicates,return=representation')
+        if isinstance(result, list) and result:
+            return
+    raise RuntimeError('graduation update conflict')
+
+
+def render_analysis_management():
+    st.subheader('分析・管理')
+    profile = st.session_state['cm_profile']
+    app_col, refresh_col = st.columns([3, 1], gap='small', vertical_alignment='bottom')
+    with app_col:
+        source = st.selectbox('学習アプリ', SUBJECT_NAMES, format_func=SUBJECT_NAMES.__getitem__,
+                              key='cm_analysis_source')
+    with refresh_col:
+        refresh = cm_button('記録を更新', key='cm_analysis_refresh', use_container_width=True)
+    cached = st.session_state.get('cm_analysis_data')
+    try:
+        if refresh or not cached or cached['key'] != (profile, source) or time.monotonic() - cached['at'] >= 30:
+            with st.spinner('学習記録を集計しています…'):
+                units = cm_analysis_load(source, profile)
+            cached = {'key': (profile, source), 'at': time.monotonic(), 'units': units}
+            st.session_state['cm_analysis_data'] = cached
+        states = cm_graduation_states(profile)
+        if any(row['profile_id'] != profile for row in states):
+            raise RuntimeError('analysis graduation owner mismatch')
+        saved = next((row.get('items') or {} for row in states if row['source_app'] == source), {})
+    except (RuntimeError, ValueError, KeyError, TypeError) as exc:
+        cm_diag_record('operation', 'cm_analysis_load', status='error', error=exc)
+        cm_error('学習記録を読み込めませんでした。「記録を更新」で再試行してください。')
+        return
+
+    units = {key: dict(value) for key, value in cached['units'].items()}
+    for key, value in saved.items():
+        if not key.startswith('unit:') or not isinstance((value or {}).get('record'), dict):
+            continue
+        menu_id = key[5:]
+        units.setdefault(('menu', menu_id), {'label': menu_id, 'menu_id': menu_id,
+                                             'correct': 0, 'total': 0, 'attempts': set(), 'last': None})
+    if message := st.session_state.pop('cm_analysis_message', None):
+        st.success(message)
+    if not units:
+        st.info('このアプリの単元や学習記録が連携されると、ここに表示されます。')
+        return
+
+    def rate(entry):
+        return entry['correct'] / entry['total'] if entry['total'] else None
+
+    for entry in units.values():
+        entry['certificate'] = (saved.get('unit:' + entry['menu_id']) or {}) if entry['menu_id'] else {}
+        entry['graduated'] = isinstance(entry['certificate'].get('record'), dict)
+
+    ordering_col, filter_col = st.columns(2, gap='small')
+    with ordering_col:
+        order = st.selectbox('並び順', ('正答率が低い順', '正答率が高い順', '学習回数が多い順', '最近の学習順'),
+                             key='cm_analysis_order')
+    with filter_col:
+        status = st.selectbox('修了状態', ('すべて', '未認定', '修了認定済み'), key='cm_analysis_status')
+    ordered = sorted(units.items(), key=lambda pair: (pair[1]['label'], pair[0]))
+    if order.startswith('正答率'):
+        direction = -1 if order == '正答率が高い順' else 1
+        ordered.sort(key=lambda pair: (not pair[1]['total'], direction * (rate(pair[1]) or 0)))
+    elif order == '学習回数が多い順':
+        ordered.sort(key=lambda pair: len(pair[1]['attempts']), reverse=True)
+    else:
+        ordered.sort(key=lambda pair: pair[1]['last'] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    visible = [(key, entry) for key, entry in ordered if status == 'すべて'
+               or entry['graduated'] == (status == '修了認定済み')]
+    st.caption(f'{len(units)}単元 · 修了認定済み {sum(e["graduated"] for e in units.values())}単元')
+    if not visible:
+        st.info('条件に合う単元はありません。')
+        return
+
+    st.dataframe([{
+        '単元': entry['label'],
+        '正答率': rate(entry),
+        '正解数': entry['correct'] if entry['total'] else None,
+        '採点数': entry['total'],
+        '学習回数': len(entry['attempts']),
+        '最終学習日': entry['last'].astimezone(TOKYO).date() if entry['last'] else None,
+        '修了認定': '認定済み' if entry['graduated'] else '未認定' if entry['menu_id'] else '単元ID未連携',
+    } for _, entry in visible], hide_index=True, use_container_width=True,
+        column_config={'正答率': st.column_config.NumberColumn(format='percent')})
+    st.caption('正答率は自動採点された最初の回答で集計します。過去の記録は、保存済みの正解数と出題数を使います。')
+
+    choices = {key: entry for key, entry in visible if entry['menu_id']}
+    if not choices:
+        return
+    from collections import Counter
+    labels = Counter(entry['label'] for entry in choices.values())
+    with st.container(border=True):
+        st.markdown('**単元の修了認定**')
+        unit_key = st.selectbox('対象の単元', choices, index=None, placeholder='単元を選択',
+                                format_func=lambda key: choices[key]['label'] if labels[choices[key]['label']] == 1
+                                else f'{choices[key]["label"]}（{choices[key]["menu_id"]}）',
+                                key='cm_analysis_unit_' + source)
+        st.caption('認定した単元は、次回作成される「きょう やること」の候補から外れます。')
+        if unit_key is None:
+            return
+        entry = choices[unit_key]
+        certify = not entry['graduated']
+        action = '修了認定する' if certify else '修了認定を取り消す'
+        version = entry['certificate'].get('version')
+        button_key = f'cm_analysis_certificate_{source}_{entry["menu_id"]}_{version}_{certify}'
+        if cm_button(action, key=button_key, type='primary' if certify else 'secondary'):
+            try:
+                cm_analysis_certificate(source, entry['menu_id'], certify, version)
+            except ValueError as exc:
+                cm_error(str(exc))
+            except (RuntimeError, TypeError, KeyError) as exc:
+                cm_diag_record('operation', 'cm_analysis_certificate', status='error', error=exc)
+                cm_error('修了認定を変更できませんでした。「記録を更新」で確認してください。')
+            else:
+                st.session_state.pop('cm_plan_snapshot', None)
+                st.session_state['cm_analysis_message'] = ('修了認定しました。' if certify else '修了認定を取り消しました。')
+                st.rerun()
 
 
 def cm_graduation_states(profile=None):
