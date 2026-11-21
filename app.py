@@ -63,7 +63,7 @@ APP_DEFINITIONS = (
 
 # Local diagnostics: bounded timing/error metadata; never request bodies or credentials.
 CM_DIAG_LIMIT = 2000
-CM_DIAG_VERSION = 'operation-log-2-hub47'
+CM_DIAG_VERSION = 'operation-log-2-hub48'
 
 
 def cm_diag_state():
@@ -231,6 +231,64 @@ def cm_diag_mark_ready():
     d['pending'] = None
 
 
+CM_KOTOBA_AUDIO_BRIDGE = """<!doctype html><script>
+let host;
+const send=(type,extra={})=>parent.postMessage({isStreamlitMessage:true,type,...extra},'*');
+try{
+ host=parent;
+ host.__cmKotobaAudioPoll=request=>{
+  send('streamlit:setComponentValue',{value:request,dataType:'json'});
+ };
+}catch{}
+window.addEventListener('message', event=>{
+ if(event.source!==parent||event.data?.type!=='streamlit:render')return;
+ const response=event.data.args?.audio_response;
+ if(response)host?.__cmKotobaAudioReply?.(response);
+});
+send('streamlit:componentReady',{apiVersion:1});
+send('streamlit:setFrameHeight',{height:0});
+</script>"""
+
+
+@st.fragment
+def cm_kotoba_audio_bridge():
+    widget_key = 'cm_kotoba_audio_bridge'
+    request = st.session_state.get(widget_key)
+    profile = st.session_state.get('cm_profile')
+    response = st.session_state.get('cm_kotoba_audio_poll_response')
+    if isinstance(request, dict) and profile:
+        request_id = request.get('request_id')
+        ticket = request.get('ticket')
+        nonce = request.get('nonce')
+        if (isinstance(request_id, str) and re.fullmatch(r'[a-f0-9-]{36}', request_id)
+                and isinstance(ticket, str) and re.fullmatch(r'[A-Za-z0-9_-]{43}', ticket)
+                and isinstance(nonce, str) and re.fullmatch(r'[a-f0-9-]{36}', nonce)
+                and (not response or (response['id'], response['_profile']) != (request_id, profile))):
+            ticket_hash = hashlib.sha256(ticket.encode()).hexdigest()
+            response = {'id': request_id, '_profile': profile, 'status': 'waiting'}
+            try:
+                url, key = cm_service_config()
+                rows = cm_api_request(url, 'GET', '/rest/v1/chokomana_launch_tickets', key=key, timeout=3, params={
+                    'select': 'kotoba_audio', 'ticket_hash': 'eq.' + ticket_hash,
+                    'profile_id': 'eq.' + profile, 'source_app': 'eq.kotoba', 'used_at': 'not.is.null',
+                    'plan_item_id': 'not.is.null', 'expires_at': 'gt.' + datetime.now(timezone.utc).isoformat(),
+                    'limit': '1',
+                })
+                audio = rows[0]['kotoba_audio'] if rows else None
+                if isinstance(audio, dict) and audio.get('nonce') == nonce:
+                    response.update(status=audio['status'], parts=audio.get('parts'), settings=audio.get('settings'))
+            except Exception:
+                response['status'] = 'error'
+            stage = (nonce, response['status'])
+            if st.session_state.get('cm_kotoba_audio_last_status') != stage:
+                st.session_state['cm_kotoba_audio_last_status'] = stage
+                cm_diag_record('audio', 'kotoba_launch', trace_id=ticket_hash[:16],
+                               stage='server_relay', status=response['status'])
+            st.session_state['cm_kotoba_audio_poll_response'] = response
+    result = {k: v for k, v in response.items() if k != '_profile'} if response and response['_profile'] == profile else None
+    cm_auth_component(CM_KOTOBA_AUDIO_BRIDGE)(audio_response=result, key=widget_key, default=None)
+
+
 def cm_diag_bridge(show_download=False):
     d = cm_diag_state()
     settings = show_download
@@ -238,7 +296,9 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='47', default=None)
+        app_version='48', default=None)
+    if not settings and st.session_state.get('cm_profile'):
+        cm_kotoba_audio_bridge()
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -3079,7 +3139,7 @@ button:hover{background:#215e53}button:focus-visible{outline:3px solid #86b5a3;o
 let w=window,d=document;
 if(cfg.parent){try{w=parent;d=w.document}catch{w=window;d=document}}
 if(w.__cmUxDiagnosticsV2){w.__cmUxDiagnosticsV2.mount();return}
-const LIMIT=1500,KEY='cm_ux_v2:'+cfg.source,BUILD='20261121.hub47';
+const LIMIT=1500,KEY='cm_ux_v2:'+cfg.source,BUILD='20261121.hub48';
 let rows=[],dropped=0,storage='available',timer=null,pending=null,quiet=null;
 const id=()=>w.crypto?.randomUUID?.()||Math.random().toString(36).slice(2)+Date.now();
 const clean=v=>String(v||'').replace(/https?:\/\/[^\s<>"']+/g,'[url]').replace(/(?:Bearer\s+\S+|sb_(?:secret|publishable)_\S+|eyJ[\w.-]+)/gi,'[token]').replace(/\b[a-f0-9]{24,}\b/gi,'[id]').replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi,'[email]').slice(0,140);
@@ -3165,149 +3225,120 @@ if(d.readyState==='loading')d.addEventListener('DOMContentLoaded',attach,{once:t
 function installKotobaLaunchAudio(w,d){
  if(w.__cmKotobaLaunchAudio)return;
  w.__cmKotobaLaunchAudio=true;
- const protocol='chokomana:kotoba-audio:v2';
  let launch=null,active=null,warmup=null;
  const record=(entry,status,stage,extra={})=>w.__cmUxDiagnosticsV2?.log('audio','kotoba_launch',{
   trace_id:entry.trace,menu_id:entry.menu,status,stage,
   duration_ms:Math.round(w.performance.now()-entry.openedAt),...extra
  });
- function inspectWindow(entry,stage){
-  let status;
-  try{status=entry.child.closed?'window_handle_closed':'window_handle_open'}
-  catch{status='window_handle_inaccessible'}
-  record(entry,status,stage);
- }
- function stop(){
+ function end(entry){
+  if(launch!==entry)return;
+  launch=null;
+  w.clearTimeout(entry.timer);
+  w.clearTimeout(entry.responseTimer);
   if(!active&&!warmup)return;
-  const speech=active;
-  active=null;
-  warmup=null;
-  if(speech){
-   w.clearTimeout(speech.timer);
-   speech.port.close();
-  }
+  if(active)w.clearTimeout(active.timer);
+  active=null;warmup=null;
   w.speechSynthesis?.cancel();
  }
  function open(event){
   const link=event.target?.closest?.('a.cm-plan-launch[data-source="kotoba"]');
   if(event.defaultPrevented||!link||!event.isTrusted||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
   let url;
-  try{url=new URL(link.href);if(url.protocol!=='https:'||url.username||url.password||!url.searchParams.has('cm_launch'))return}catch{return}
-  const nonce=w.crypto.randomUUID();
-  url.searchParams.set('cm_kotoba_audio',nonce);
+  try{url=new URL(link.href)}catch{return}
+  const ticket=url.searchParams.get('cm_launch');
+  if(url.protocol!=='https:'||url.username||url.password||!/^[A-Za-z0-9_-]{43}$/.test(ticket||''))return;
+  if(launch)end(launch);
   const trace=url.searchParams.get('cm_trace');
-  const entry={origin:url.origin,nonce,openedAt:w.performance.now(),used:false,
-   trace:/^[a-f0-9]{16}$/i.test(trace||'')?trace.toLowerCase():undefined,menu:link.dataset?.menu};
+  const entry={ticket,nonce:w.crypto.randomUUID(),trace:/^[a-f0-9]{16}$/.test(trace||'')?trace:undefined,
+   menu:link.dataset?.menu,openedAt:w.performance.now(),played:false,requestId:null};
   const activation=w.navigator?.userActivation;
-  record(entry,'clicked','start_button',{metric:activation?(activation.isActive?'user_activation_active':'no_user_activation'):'activation_unavailable'});
-  stop();
-  if(w.speechSynthesis&&w.SpeechSynthesisUtterance){
-   try{
-    // Prime speech during the real Start click in the document that will speak.
-    const u=new w.SpeechSynthesisUtterance('はじめます');
-    u.lang='ja-JP';u.volume=0;
-    warmup=u;
-    u.onstart=()=>record(entry,'started','speech_warmup');
-    u.onend=()=>{if(warmup===u)warmup=null};
-    u.onerror=e=>{
-     if(warmup===u)warmup=null;
-     record(entry,'failed','speech_warmup',{error_type:e.error||'unknown'});
-    };
-    w.speechSynthesis.speak(u);
-   }catch{warmup=null;record(entry,'failed','speech_warmup',{error_type:'exception'})}
-  }else record(entry,'failed','speech_warmup',{error_type:'unsupported'});
-  let child;
-  try{
-   child=w.open('about:blank','_blank');
-   if(!child){stop();record(entry,'popup_blocked','open_blank_tab');return}
-   entry.child=child;
-   let openerStatus;
-   try{
-    const opener=child.opener;
-    openerStatus=opener===w?'opener_matches_hub':opener?'opener_other_window':'opener_missing';
-   }catch{openerStatus='opener_inaccessible'}
-   record(entry,openerStatus,'before_navigation');
-   child.location.replace(url.href);
-  }catch{child?.close();stop();record(entry,'popup_failed','open_or_navigate_tab');return}
-  event.preventDefault();
-  launch=entry;
-  record(entry,'opened','navigation_requested');
-  w.setTimeout(()=>inspectWindow(entry,'after_navigation_1s'),1000);
-  w.setTimeout(()=>inspectWindow(entry,'after_navigation_8s'),8000);
- }
- function receive(event){
-  const a=event.data,entry=launch;
-  if(!entry||a?.protocol!==protocol||a.nonce!==entry.nonce)return;
-  record(entry,'received','relay_request');
-  let rejection;
-  if(event.origin!==entry.origin)rejection='origin_mismatch';
-  else if(!event.source||event.source===entry.child)rejection='invalid_source';
-  else{
-   try{
-    if(entry.child.closed)rejection='window_handle_closed';
-    else if(event.source.parent!==entry.child)rejection='source_parent_mismatch';
-   }catch{rejection='source_parent_inaccessible'}
-  }
-  if(rejection){record(entry,'rejected','relay_request',{error_type:rejection});return}
-  const port=event.ports?.[0];
-  if(!port||entry.used||a.type!=='speak'||a.id!==entry.nonce
-     ||!Array.isArray(a.parts)||a.parts.length<1||a.parts.length>16
-     ||a.parts.some(p=>typeof p!=='string'||!p.trim()||p.length>2000)
-     ||a.parts.join('').length>3000){
-   record(entry,'rejected','relay_request',{error_type:entry.used?'already_used':'invalid_request'});return;
-  }
-  record(entry,'accepted','relay_request');
-  entry.used=true;
-  stop();
-  const reply=(status,error)=>port.postMessage({status,error});
-  const bounded=(value,min,max,fallback)=>Number.isFinite(value)?Math.min(max,Math.max(min,value)):fallback;
-  const settings=a.settings||{};
+  record(entry,'clicked','start_button',{metric:activation?.isActive?'user_activation_active':'activation_unavailable_or_inactive'});
   if(!w.speechSynthesis||!w.SpeechSynthesisUtterance){
-   reply('error','unsupported');port.close();record(entry,'failed','speech_playback',{error_type:'unsupported'});return;
+   record(entry,'failed','speech_warmup',{error_type:'unsupported'});return;
   }
-  const speech={port,timer:null,utterance:null};
-  active=speech;
-  port.onmessage=message=>{if(active===speech&&message.data?.type==='cancel')stop()};
+  try{
+   const u=new w.SpeechSynthesisUtterance('はじめます');
+   warmup=u;u.lang='ja-JP';u.volume=0;
+   u.onstart=()=>record(entry,'started','speech_warmup');
+   u.onerror=e=>{if(warmup===u)warmup=null;record(entry,'failed','speech_warmup',{error_type:e.error||'unknown'})};
+   u.onend=()=>{if(warmup===u)warmup=null};
+   w.speechSynthesis.speak(u);
+  }catch{record(entry,'failed','speech_warmup',{error_type:'exception'})}
+  // Use the link's normal no-opener navigation. Playback stays in this activated document.
+  url.searchParams.set('cm_kotoba_audio_db',entry.nonce);
+  const original=link.href;
+  link.href=url.href;
+  w.setTimeout(()=>{if(link.href===url.href)link.href=original},0);
+  launch=entry;
+  record(entry,'requested','navigation');
+  schedule(entry,1100);
+ }
+ function schedule(entry,delay){
+  if(launch===entry)entry.timer=w.setTimeout(()=>poll(entry),delay);
+ }
+ function poll(entry){
+  if(launch!==entry)return;
+  if(w.performance.now()-entry.openedAt>(entry.played?120000:40000)){
+   record(entry,'timeout','audio_transfer');end(entry);return;
+  }
+  if(!w.__cmKotobaAudioPoll){schedule(entry,600);return}
+  entry.requestId=w.crypto.randomUUID();
+  w.__cmKotobaAudioPoll({request_id:entry.requestId,ticket:entry.ticket,nonce:entry.nonce});
+  entry.responseTimer=w.setTimeout(()=>{
+   if(launch!==entry)return;
+   entry.requestId=null;
+   record(entry,'timeout','poll_response');schedule(entry,1200);
+  },4500);
+ }
+ w.__cmKotobaAudioReply=response=>{
+  const entry=launch;
+  if(!entry||!entry.requestId||entry.requestId!==response.id)return;
+  entry.requestId=null;w.clearTimeout(entry.responseTimer);
+  if(response.status==='skipped'||response.status==='cancelled'){
+   record(entry,response.status,'audio_transfer');end(entry);return;
+  }
+  if(response.status==='error'){
+   record(entry,'failed','audio_transfer',{error_type:'server_read_failed'});end(entry);return;
+  }
+  if(response.status==='ready'&&!entry.played){
+   entry.played=true;record(entry,'received','audio_transfer');play(entry,response);
+  }
+  const age=w.performance.now()-entry.openedAt;
+  schedule(entry,entry.played||age>8000?1400:850);
+ };
+ function play(entry,data){
+  if(warmup){warmup=null;w.speechSynthesis.cancel()}
+  const speech={timer:null,utterance:null};active=speech;
+  const settings=data.settings;
   const voices=w.speechSynthesis.getVoices().filter(v=>/^ja(?:[-_]|$)/i.test(v.lang||''));
   const score=v=>(/Natural|Neural|Premium|Enhanced|Online|オンライン|高品質/i.test(v.name)?100:0)+(/Google.*日本語/i.test(v.name)?60:0)+(/Microsoft/i.test(v.name)?30:0)+(v.default?10:0);
   const voice=voices.find(v=>v.voiceURI===settings.voice)||voices.sort((a,b)=>score(b)-score(a))[0];
-  const fail=reason=>{
-   if(active!==speech)return;
-   reply('error',reason);stop();record(entry,'failed','speech_playback',{error_type:reason});
-  };
-  function read(i){
+  const fail=reason=>{record(entry,'failed','speech_playback',{error_type:reason});end(entry)};
+  function read(index){
    if(active!==speech)return;
    try{
-    const u=new w.SpeechSynthesisUtterance(a.parts[i]);
-    speech.utterance=u;
-    u.lang='ja-JP';
-    if(voice)u.voice=voice;
-    u.rate=bounded(settings.rate,.5,1.5,.88);
-    u.pitch=bounded(settings.pitch,.5,1.5,1);
-    u.volume=bounded(settings.volume,0,1,1);
-    u.onstart=()=>{
-     if(active!==speech||speech.utterance!==u)return;
+    const u=new w.SpeechSynthesisUtterance(data.parts[index]);speech.utterance=u;
+    u.lang='ja-JP';if(voice)u.voice=voice;
+    u.rate=settings.rate;u.pitch=settings.pitch;u.volume=settings.volume;
+    const current=()=>active===speech&&speech.utterance===u;
+    u.onstart=()=>{if(current()){
      w.clearTimeout(speech.timer);
-     reply('started');
-     if(i===0)record(entry,'started','speech_playback');
-    };
-    u.onerror=e=>{if(speech.utterance===u)fail(e.error||'unknown')};
-    u.onend=()=>{
-     if(active!==speech||speech.utterance!==u)return;
+     if(index===0)record(entry,'started','speech_playback');
+    }};
+    u.onerror=e=>{if(current())fail(e.error||'unknown')};
+    u.onend=()=>{if(current()){
      w.clearTimeout(speech.timer);
-     if(i+1===a.parts.length){active=null;reply('ended');port.close();record(entry,'ended','speech_playback');return}
-     reply('paused');
-     speech.timer=w.setTimeout(()=>read(i+1),Math.round(1000*bounded(settings.pause,0,2,.8)));
-    };
-    speech.timer=w.setTimeout(()=>fail('start_timeout'),2500);
+     if(index+1===data.parts.length){record(entry,'ended','speech_playback');end(entry);return}
+     speech.timer=w.setTimeout(()=>read(index+1),Math.round(1000*settings.pause));
+    }};
+    speech.timer=w.setTimeout(()=>fail('start_timeout'),3000);
     w.speechSynthesis.speak(u);
    }catch{fail('exception')}
   }
   read(0);
  }
  d.addEventListener('click',open,true);
- w.addEventListener('message',receive);
- w.addEventListener('pagehide',stop);
+ w.addEventListener('pagehide',()=>{if(launch)end(launch)});
 }
 if(window.parent!==window){
  try{
