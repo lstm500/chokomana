@@ -1984,7 +1984,7 @@ CM_TRAIN_STYLE = """<style>
 .cm-train-face,.cm-train-placeholder{display:grid;place-items:center;min-height:0;
   overflow:hidden;background:#ecf4f7;border:2px solid #7091a4;border-radius:9px}
 .cm-train-placeholder{color:#476a80;font-size:clamp(17px,4vw,25px);background:#e2edf1}
-.cm-train-face img,.cm-train-card img{display:block;width:90%;height:85%;object-fit:contain}
+.cm-train-face img{display:block;width:90%;height:85%;object-fit:contain}
 .cm-train-art{width:92%;height:100%;background:var(--symbol) center/contain no-repeat}
 .cm-train-match .cm-train-face{background:#fff1b6;border-color:#ca8a16;
   box-shadow:inset 0 0 0 1px #d6a336}
@@ -2026,10 +2026,10 @@ CM_TRAIN_STYLE = """<style>
   padding:10px 12px;background:#18466b;color:white;font-weight:750;cursor:pointer;
   border-radius:12px;list-style:none
 }
-.cm-train-prize-summary::-webkit-details-marker,.cm-train-card summary::-webkit-details-marker{
+.cm-train-prize-summary::-webkit-details-marker{
   display:none
 }
-.cm-train-prize-summary:focus-visible,.cm-train-card summary:focus-visible{
+.cm-train-prize-summary:focus-visible,.cm-train-card:focus-visible,.cm-train-detail-close:focus-visible{
   outline:3px solid #2383c8;outline-offset:3px
 }
 .cm-train-prize-headline{font-size:clamp(1.05rem,4.6vw,1.35rem);font-weight:850}
@@ -2042,18 +2042,25 @@ CM_TRAIN_STYLE = """<style>
 .cm-train-collection{
   display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;align-items:start
 }
-.cm-train-card{border:1px solid #aac5d5;border-radius:12px;background:#eef5f8;color:#17344f;
-  text-align:center;line-height:1.3;min-width:0}
-.cm-train-card summary{display:grid;justify-items:center;gap:3px;padding:8px;
-  border-radius:12px;list-style:none;cursor:pointer}
-.cm-train-card-art{display:block;width:min(100%,104px);aspect-ratio:1;object-fit:contain}
+.cm-train-card{display:grid;justify-items:center;gap:3px;width:100%;padding:8px;
+  border:1px solid #aac5d5;border-radius:12px;background:#eef5f8;color:#17344f;
+  text-align:center;line-height:1.3;min-width:0;font:inherit;cursor:pointer}
+.cm-train-card-art{display:block;width:min(90%,122px);aspect-ratio:1;object-fit:contain}
 .cm-train-card strong{font-size:.9rem}
 .cm-train-card-summary{color:#284e69;font-size:.82rem}
 .cm-train-card-more{font-size:.76rem;color:#275d85;text-decoration:underline}
-.cm-train-card[open] .cm-train-card-art{width:min(100%,180px)}
-.cm-train-card[open] .cm-train-card-more{display:none}
-.cm-train-card-detail{padding:0 8px 12px}
-.cm-train-destination{font-size:.9rem;font-weight:750}
+.cm-train-detail{width:min(32rem,calc(100% - 1.5rem));max-height:calc(100dvh - 2rem);
+  box-sizing:border-box;margin:auto;padding:clamp(14px,4vw,26px);border:2px solid #aac5d5;
+  border-radius:22px;background:#f6fafc;color:#17344f;text-align:center;cursor:pointer}
+.cm-train-detail::backdrop{background:#13283aa8}
+.cm-train-detail-line{font-size:clamp(1.6rem,6vw,2.55rem);line-height:1.25;font-weight:850}
+.cm-train-detail-art{display:block;width:min(15.5rem,65vw,35dvh);aspect-ratio:1;
+  object-fit:contain;margin:0 auto}
+.cm-train-detail-sign{display:grid;gap:4px;margin:12px auto;padding:8px 14px;border-radius:10px;
+  background:#18334b;color:white;font-weight:800;font-size:clamp(1.2rem,4.5vw,1.7rem)}
+.cm-train-detail-sign-label{font-size:.8rem;font-weight:600}
+.cm-train-detail-close{margin-top:12px;padding:7px 16px;border:1px solid #aac5d5;border-radius:10px;
+  background:white;color:#17344f;font-weight:750;cursor:pointer}
 .cm-train-feature{font-size:.78rem;color:#284e69;margin-top:4px}
 .cm-train-count-before,.cm-train-empty-before{display:none}
 .stApp:has(.cm-train-prize[open]) .cm-train-card-new,
@@ -2162,6 +2169,37 @@ def cm_train_board(result, animate=False, *, spinning=False):
             f'<span class="cm-train-message">{message}</span></div>{popup}</section>')
 
 
+CM_TRAIN_COLLECTION_POPUP = """<dialog class="cm-train-detail" id="cm-train-detail"
+  aria-labelledby="cm-train-detail-line">
+  <div id="cm-train-detail-line" class="cm-train-detail-line" role="heading" aria-level="3"></div>
+  <img class="cm-train-detail-art" alt="" />
+  <div class="cm-train-detail-series"></div>
+  <div class="cm-train-detail-sign">
+    <span class="cm-train-detail-sign-label">行先表示</span>
+    <strong></strong>
+  </div>
+  <div class="cm-train-feature"></div>
+  <button type="button" class="cm-train-detail-close" autofocus>とじる</button>
+</dialog>
+<script>
+(() => {
+  const root = document.currentScript.parentElement;
+  const popup = root.querySelector("dialog");
+  root.querySelector(".cm-train-collection").addEventListener("click", event => {
+    const card = event.target.closest(".cm-train-card");
+    if (!card || popup.open) return;
+    popup.querySelector(".cm-train-detail-line").textContent = card.dataset.line;
+    popup.querySelector(".cm-train-detail-art").src = card.querySelector("img").src;
+    popup.querySelector(".cm-train-detail-series").textContent = card.dataset.series;
+    popup.querySelector(".cm-train-detail-sign strong").textContent = card.dataset.destination;
+    popup.querySelector(".cm-train-feature").textContent = card.dataset.feature;
+    popup.showModal();
+  });
+  popup.addEventListener("click", () => popup.close());
+})();
+</script>"""
+
+
 def cm_train_collection(collection, pending_prize=None):
     cards = []
     already_owned = False
@@ -2179,21 +2217,20 @@ def cm_train_collection(collection, pending_prize=None):
         destination, feature = CM_TRAIN_DETAILS[train]
         image = f'data:image/webp;base64,{artwork}'
         cards.append(
-            f'<details class="cm-train-card{state}"><summary>'
+            f'<button type="button" class="cm-train-card{state}" aria-haspopup="dialog" '
+            f'aria-controls="cm-train-detail" data-line="{html.escape(line, quote=True)}" '
+            f'data-series="{html.escape(series, quote=True)}" data-destination="{html.escape(destination, quote=True)}" '
+            f'data-feature="{html.escape(feature, quote=True)}">'
             f'<img class="cm-train-card-art" src="{image}" loading="lazy" alt="" />'
             f'<strong>{html.escape(line)}<br />{html.escape(series)}</strong>'
             f'<span class="cm-train-card-summary">{count}</span>'
-            '<span class="cm-train-card-more">くわしく見る</span></summary>'
-            '<div class="cm-train-card-detail">'
-            f'<div class="cm-train-destination">行先表示　{html.escape(destination)}</div>'
-            f'<div class="cm-train-feature">{html.escape(feature)}</div>'
-            '</div></details>')
+            '<span class="cm-train-card-more">くわしく見る</span></button>')
     empty_message = "あたりが出ると、ここに電車メダルがならびます。"
     if cards:
         empty = (f'<p class="cm-train-empty-before">{empty_message}</p>'
                  if not already_owned else "")
-        st.markdown(empty + '<div class="cm-train-collection">' + "".join(cards) + '</div>',
-                    unsafe_allow_html=True)
+        st.html('<div>' + empty + '<div class="cm-train-collection">' + "".join(cards)
+                + '</div>' + CM_TRAIN_COLLECTION_POPUP + '</div>', unsafe_allow_javascript=True)
     else:
         st.caption(empty_message)
 
