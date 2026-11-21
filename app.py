@@ -238,7 +238,7 @@ def cm_diag_bridge(show_download=False):
     event=cm_auth_component(cm_diag_html())(key='cm_diagnostics_download' if settings else 'cm_diagnostics_bridge',
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
-        app_version='41', default=None)
+        app_version='42', default=None)
     if not settings and isinstance(event,dict) and isinstance(event.get('refresh_plan'),str):
         nonce=event['refresh_plan']
         if nonce!=st.session_state.get('cm_plan_last_visibility'):
@@ -3143,6 +3143,113 @@ w.__cmUxDiagnosticsV2={log,ready,sent,mount,download,get records(){return rows},
 if(d.readyState==='loading')d.addEventListener('DOMContentLoaded',attach,{once:true});else attach();log('lifecycle','module_ready',box());
 })({"source": "hub", "parent": true, "mount": false});
 
+function installKotobaLaunchAudio(w,d){
+ if(w.__cmKotobaLaunchAudio)return;
+ w.__cmKotobaLaunchAudio=true;
+ const protocol='chokomana:kotoba-audio:v1';
+ let launch=null,active=null,warmup=null;
+ const record=(status,extra={})=>w.__cmUxDiagnosticsV2?.log('audio','kotoba_launch',{status,...extra});
+ function stop(){
+  if(!active&&!warmup)return;
+  const speech=active;
+  active=null;
+  warmup=null;
+  if(speech)w.clearTimeout(speech.timer);
+  w.speechSynthesis?.cancel();
+ }
+ function open(event){
+  const link=event.target?.closest?.('a.cm-plan-launch[data-source="kotoba"]');
+  if(!link||!event.isTrusted||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
+  let url;
+  try{url=new URL(link.href);if(url.protocol!=='https:'||url.username||url.password||!url.searchParams.has('cm_launch'))return}catch{return}
+  const nonce=w.crypto.randomUUID();
+  url.searchParams.set('cm_kotoba_audio',nonce);
+  const openedAt=w.performance.now();
+  stop();
+  if(w.speechSynthesis&&w.SpeechSynthesisUtterance){
+   try{
+    // Prime speech during the real Start click in the document that will speak.
+    const u=new w.SpeechSynthesisUtterance('はじめます');
+    u.lang='ja-JP';u.volume=0;
+    warmup=u;
+    u.onend=u.onerror=()=>{if(warmup===u)warmup=null};
+    w.speechSynthesis.speak(u);
+   }catch{warmup=null}
+  }
+  let child;
+  try{
+   child=w.open('about:blank','_blank');
+   if(!child){stop();record('popup_blocked');return}
+   child.location.replace(url.href);
+  }catch{child?.close();stop();record('popup_failed');return}
+  event.preventDefault();
+  launch={child,origin:url.origin,nonce,openedAt,used:false};
+  record('opened');
+ }
+ function receive(event){
+  const a=event.data,entry=launch;
+  if(!entry||a?.protocol!==protocol||a.nonce!==entry.nonce||event.origin!==entry.origin
+     ||!event.source||event.source===entry.child)return;
+  try{if(event.source.parent!==entry.child||entry.child.closed)return}catch{return}
+  if(a.type==='cancel'){
+   if(active?.entry===entry&&active.id===a.id&&active.source===event.source)stop();
+   return;
+  }
+  if(entry.used||a.type!=='speak'||a.id!==entry.nonce
+     ||!Array.isArray(a.parts)||a.parts.length<1||a.parts.length>16
+     ||a.parts.some(p=>typeof p!=='string'||!p.trim()||p.length>2000)
+     ||a.parts.join('').length>3000)return;
+  entry.used=true;
+  stop();
+  const reply=(status,error)=>event.source.postMessage({protocol,nonce:entry.nonce,id:a.id,status,error},entry.origin);
+  const bounded=(value,min,max,fallback)=>Number.isFinite(value)?Math.min(max,Math.max(min,value)):fallback;
+  const settings=a.settings||{};
+  if(!w.speechSynthesis||!w.SpeechSynthesisUtterance){reply('error','unsupported');record('failed',{error_type:'unsupported'});return}
+  const speech={entry,id:a.id,source:event.source,timer:null,utterance:null};
+  active=speech;
+  const voices=w.speechSynthesis.getVoices().filter(v=>/^ja(?:[-_]|$)/i.test(v.lang||''));
+  const score=v=>(/Natural|Neural|Premium|Enhanced|Online|オンライン|高品質/i.test(v.name)?100:0)+(/Google.*日本語/i.test(v.name)?60:0)+(/Microsoft/i.test(v.name)?30:0)+(v.default?10:0);
+  const voice=voices.find(v=>v.voiceURI===settings.voice)||voices.sort((a,b)=>score(b)-score(a))[0];
+  const fail=reason=>{
+   if(active!==speech)return;
+   stop();reply('error',reason);record('failed',{error_type:reason});
+  };
+  function read(i){
+   if(active!==speech)return;
+   try{
+    const u=new w.SpeechSynthesisUtterance(a.parts[i]);
+    speech.utterance=u;
+    u.lang='ja-JP';
+    if(voice)u.voice=voice;
+    u.rate=bounded(settings.rate,.5,1.5,.88);
+    u.pitch=bounded(settings.pitch,.5,1.5,1);
+    u.volume=bounded(settings.volume,0,1,1);
+    u.onstart=()=>{
+     if(active!==speech||speech.utterance!==u)return;
+     w.clearTimeout(speech.timer);
+     reply('started');
+     if(i===0)record('started',{duration_ms:Math.round(w.performance.now()-entry.openedAt)});
+    };
+    u.onerror=e=>{if(speech.utterance===u)fail(e.error||'unknown')};
+    u.onend=()=>{
+     if(active!==speech||speech.utterance!==u)return;
+     w.clearTimeout(speech.timer);
+     if(i+1===a.parts.length){active=null;reply('ended');return}
+     reply('paused');
+     speech.timer=w.setTimeout(()=>read(i+1),Math.round(1000*bounded(settings.pause,0,2,.8)));
+    };
+    speech.timer=w.setTimeout(()=>fail('start_timeout'),2500);
+    w.speechSynthesis.speak(u);
+   }catch{fail('exception')}
+  }
+  read(0);
+ }
+ d.addEventListener('click',open,true);
+ w.addEventListener('message',receive);
+ w.addEventListener('pagehide',stop);
+}
+if(window.parent!==window){try{installKotobaLaunchAudio(parent,parent.document)}catch{}}
+
 (()=>{'use strict';
 const LIMIT=2000,STORE='chokomana_operation_log_v1';let diag=null,parentAccess=true;
 function makeID(){return globalThis.crypto?.randomUUID?.()||Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)}
@@ -3213,7 +3320,7 @@ window.addEventListener('message',event=>{
  if(event.source!==parent||event.data?.type!=='streamlit:render')return;
  const args=event.data.args||{};diag.merge(Array.isArray(args.server_records)?args.server_records:[]);
  if(!args.show_download)diag.notifyVisible=()=>parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:{refresh_plan:makeID()},dataType:'json'},'*');
- diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'41';
+ diag.controls=args.controls||{};diag.page=args.page;serverDropped=Number(args.server_dropped)||0;appVersion=args.app_version||'42';
  download.hidden=!args.show_download;result.hidden=!args.show_download;
  if(args.show_download)result.textContent='操作時間とエラーをJSONで保存します。';
  diag.check();diag.persist();
