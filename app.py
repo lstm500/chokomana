@@ -4005,7 +4005,7 @@ def cm_medal_candidate(candidate, analysis):
     return candidate
 
 
-def cm_plan_candidates(menus, analysis, today):
+def cm_plan_candidates(menus, analysis, today, focus=()):
     from collections import defaultdict
     groups = defaultdict(list); stats = analysis['stats']; candidates = []
     def key(m): return (m['source_app'],m['menu_id'],m['content_version'])
@@ -4036,11 +4036,12 @@ def cm_plan_candidates(menus, analysis, today):
             advanced_by_medals=advanced_by_medals or bool(fs.get('medals',{}).get('advance'))
             frontier=nexts[0];fs=stats.get(key(frontier),{})
             learned='learn' in frontier.get('mode_options',[]) and analysis['completed'].get(key(frontier),0)>0
-        chosen = [frontier] + [m for m in observed if key(m)!=key(frontier) and stats.get(key(m),{}).get('due',today+timedelta(days=1))<=today]
+        chosen = [frontier] + [m for m in mm if key(m) != key(frontier) and (
+            key(m)[:2] in focus or (m in observed and stats.get(key(m), {}).get('due', today + timedelta(days=1)) <= today))]
         for m in chosen:
             ss = stats.get(key(m), {})
             if ss.get('graduated'):continue
-            if ss.get('mastered') and ss.get('due', today)>today:
+            if ss.get('mastered') and ss.get('due', today)>today and key(m)[:2] not in focus:
                 continue
             required = m.get('prerequisite_skill_ids')
             if required:
@@ -4068,11 +4069,16 @@ def cm_plan_candidates(menus, analysis, today):
                 continue
             candidates.append({**m, 'duration_ms':int(duration), 'duration_basis':'measured' if measured else 'provisional',
                 'reason':reason, 'score':score, 'key':key(m), 'accuracy':ss.get('accuracy')})
-    candidates.extend(cm_english_candidates(menus, analysis, today))
-    return [cm_medal_candidate(c,analysis) for c in candidates]
+    candidates.extend(cm_english_candidates(menus, analysis, today, focus))
+    for candidate in candidates:
+        cm_medal_candidate(candidate, analysis)
+        if candidate['key'][:2] in focus:
+            candidate['focused'] = True
+            candidate['reason'] = '重点単元の練習'
+    return candidates
 
 
-def cm_english_candidates(menus, analysis, today):
+def cm_english_candidates(menus, analysis, today, focus=()):
     english=[m for m in menus if m['source_app']=='english'];stats=analysis['stats'];completed=analysis['completed']
     key=lambda m:('english',m['menu_id'],m['content_version'])
     by_id={m['menu_id']:m for m in english}
@@ -4092,8 +4098,9 @@ def cm_english_candidates(menus, analysis, today):
         if stage=='quiz':
             if required and not all(passed(mid) for mid in required):continue
         elif required and not all(mid in by_id and (completed.get(key(by_id[mid]),0)>0 or passed(mid)) for mid in required):continue
-        if stage=='alphabet' and m['menu_id']!=frontier and not row:continue
-        if row.get('mastered') and row.get('due',today)>today:continue
+        if k[:2] not in focus:
+            if stage=='alphabet' and m['menu_id']!=frontier and not row:continue
+            if row.get('mastered') and row.get('due',today)>today:continue
         predecessors=[p for p in english if m['menu_id'] in (p.get('next_menu_ids') or []) and ss(p).get('medals',{}).get('advance')]
         if row.get('weak'):reason,score='もういちど練習',110+20*(1-row['posterior'])
         elif row and row.get('due',today)<=today:reason,score='思い出す復習',105+min(15,(today-row['due']).days)
@@ -4124,7 +4131,7 @@ def cm_build_daily_plan(candidates, remaining_ms, today_counts, subject_spent_ms
     # First retain the best learning priority for each feasible time within a subject.
     options={}
     for source in sources:
-        dp={0:(0.0,[])}
+        dp={0:((0,0.0),[])}
         for c in sorted(grouped[source],key=lambda c:(c['menu_id'],c.get('plan_item_id',''))):
             units=math.ceil(c['duration_ms']/10000)
             completed=today_counts.get(c['key'],0)
@@ -4134,11 +4141,12 @@ def cm_build_daily_plan(candidates, remaining_ms, today_counts, subject_spent_ms
                     total=used+units*count
                     if total>capacity:break
                     bonus=sum((1,.65,.35)[completed+i] for i in range(count))
-                    quality=value+c['score']*units*bonus
+                    new_focus = int(bool(c.get('focused')) and completed == 0)
+                    quality=(value[0]+new_focus, value[1]+c['score']*units*bonus)
                     if total not in dp or quality>dp[total][0]:dp[total]=(quality,path+[(c,count)])
         options[source]=dp
-    # Coverage and time balance take precedence over the number of menus or their scores.
-    combined={0:((0,0.0,0.0),[])}
+    # Keep subject coverage, then fit as many distinct focus units as possible.
+    combined={0:((0,0,0.0,0.0),[])}
     for source in sources:
         nxt={}
         for used,(value,path) in combined.items():
@@ -4147,7 +4155,8 @@ def cm_build_daily_plan(candidates, remaining_ms, today_counts, subject_spent_ms
                 if total>capacity:continue
                 daily=spent.get(source,0)+amount*10000
                 target=targets[source]
-                score=(value[0]+int(daily>0),value[1]-((daily-target)/max(target,1))**2,value[2]+quality)
+                score=(value[0]+int(daily>0), value[1]+quality[0],
+                       value[2]-((daily-target)/max(target,1))**2, value[3]+quality[1])
                 if total not in nxt or score>nxt[total][0]:nxt[total]=(score,path+selection)
         combined=nxt
     lower=math.ceil(remaining_ms*.95/10000)
@@ -4157,7 +4166,7 @@ def cm_build_daily_plan(candidates, remaining_ms, today_counts, subject_spent_ms
     for c,count in combined[best][1]:result[c['source_app']].append({**c,'repetitions':count,'planned_ms':c['duration_ms']*count})
     # Show one card per subject before the second card of any subject.
     ordered=[]
-    for rows in result.values():rows.sort(key=lambda c:(-c['score'],c['menu_id']))
+    for rows in result.values():rows.sort(key=lambda c:(not c.get('focused'),-c['score'],c['menu_id']))
     while any(result.values()):
         for source in SUBJECT_NAMES:
             if result[source]:ordered.append(result[source].pop(0))
@@ -4395,18 +4404,22 @@ def cm_analysis_load(source, profile):
     return cm_analysis_units(catalog, events, stamps, source, profile)
 
 
-def cm_analysis_certificate(source, menu_id, certify, expected_version):
-    """Write a single unit key in the shared graduation state with optimistic locking."""
+def cm_analysis_set_unit(source, menu_id, kind, enabled, expected_version):
+    """Merge a unit preference without overwriting concurrent changes to other units."""
     from uuid import uuid4
 
     profile = st.session_state['cm_profile']  # main() has just verified the account.
-    if source not in SUBJECT_NAMES or not isinstance(menu_id, str) or not 1 <= len(menu_id) <= 507:
+    if (source not in SUBJECT_NAMES or kind not in ('unit', 'focus')
+            or not isinstance(menu_id, str) or not 1 <= len(menu_id) <= 506):
         raise ValueError('単元を確認できませんでした。')
     table = '/rest/v1/chokomana_graduation_states'
     scope = {'profile_id': 'eq.' + profile, 'source_app': 'eq.' + source}
-    key = 'unit:' + menu_id
+    key = kind + ':' + menu_id
     now = datetime.now(timezone.utc).isoformat()
-    record = {'menu_id': menu_id, 'graduated_at': now, 'recognition': 'manual'} if certify else None
+    record = None
+    if enabled:
+        record = {'menu_id': menu_id}
+        record.update({'graduated_at': now, 'recognition': 'manual'} if kind == 'unit' else {'focused_at': now})
     change = {'version': str(uuid4()), 'record': record}
 
     for _ in range(4):
@@ -4415,11 +4428,17 @@ def cm_analysis_certificate(source, menu_id, certify, expected_version):
             raise RuntimeError('invalid graduation response')
         items = (rows[0].get('items') or {}) if rows else {}
         existing = items.get(key) or {}
-        if isinstance(existing.get('record'), dict) == certify:
+        if kind == 'focus' and enabled and isinstance((items.get('unit:' + menu_id) or {}).get('record'), dict):
+            raise ValueError('修了認定済みの単元です。認定を取り消すと重点にできます。')
+        if isinstance(existing.get('record'), dict) == enabled:
             return
         if existing.get('version') != expected_version:
-            raise ValueError('別の端末で修了認定が変更されました。「記録を更新」から確認してください。')
-        updated = {'items': {**items, key: change}, 'updated_at': now}
+            raise ValueError('別の端末で変更されました。「記録を更新」で確認してください。')
+        updated_items = {**items, key: change}
+        focus_key = 'focus:' + menu_id
+        if kind == 'unit' and enabled and isinstance((items.get(focus_key) or {}).get('record'), dict):
+            updated_items[focus_key] = {'version': str(uuid4()), 'record': None}
+        updated = {'items': updated_items, 'updated_at': now}
         if rows:
             revision = rows[0]['revision']
             result = cm_account_request('PATCH', table, {**updated, 'revision': revision + 1},
@@ -4460,13 +4479,15 @@ def render_analysis_management():
 
     units = {key: dict(value) for key, value in cached['units'].items()}
     for key, value in saved.items():
-        if not key.startswith('unit:') or not isinstance((value or {}).get('record'), dict):
+        if not key.startswith(('unit:', 'focus:')) or not isinstance((value or {}).get('record'), dict):
             continue
-        menu_id = key[5:]
+        menu_id = key.split(':', 1)[1]
         units.setdefault(('menu', menu_id), {'label': menu_id, 'menu_id': menu_id,
                                              'correct': 0, 'total': 0, 'attempts': set(), 'last': None})
     if message := st.session_state.pop('cm_analysis_message', None):
         st.success(message)
+    if error := st.session_state.pop('cm_analysis_error', None):
+        cm_error(error)
     if not units:
         st.info('このアプリの単元や学習記録が連携されると、ここに表示されます。')
         return
@@ -4477,6 +4498,8 @@ def render_analysis_management():
     for entry in units.values():
         entry['certificate'] = (saved.get('unit:' + entry['menu_id']) or {}) if entry['menu_id'] else {}
         entry['graduated'] = isinstance(entry['certificate'].get('record'), dict)
+        entry['focus'] = (saved.get('focus:' + entry['menu_id']) or {}) if entry['menu_id'] else {}
+        entry['focused'] = not entry['graduated'] and isinstance(entry['focus'].get('record'), dict)
 
     ordering_col, filter_col = st.columns(2, gap='small')
     with ordering_col:
@@ -4494,59 +4517,81 @@ def render_analysis_management():
         ordered.sort(key=lambda pair: pair[1]['last'] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     visible = [(key, entry) for key, entry in ordered if status == 'すべて'
                or entry['graduated'] == (status == '修了認定済み')]
-    st.caption(f'{len(units)}単元 · 修了認定済み {sum(e["graduated"] for e in units.values())}単元')
+    st.caption(f'{len(units)}単元 · 重点 {sum(e["focused"] for e in units.values())}単元 · 修了認定済み {sum(e["graduated"] for e in units.values())}単元')
     if not visible:
         st.info('条件に合う単元はありません。')
         return
 
-    st.dataframe([{
-        '単元': entry['label'],
-        '正答率': rate(entry),
-        '正解数': entry['correct'] if entry['total'] else None,
-        '採点数': entry['total'],
-        '学習回数': len(entry['attempts']),
-        '最終学習日': entry['last'].astimezone(TOKYO).date() if entry['last'] else None,
-        '修了認定': '認定済み' if entry['graduated'] else '未認定' if entry['menu_id'] else '単元ID未連携',
-    } for _, entry in visible], hide_index=True, use_container_width=True,
-        column_config={'正答率': st.column_config.NumberColumn(format='percent')})
-    st.caption('正答率は自動採点された最初の回答で集計します。過去の記録は、保存済みの正解数と出題数を使います。')
+    st.markdown('''<style>
+    .st-key-cm_analysis_grid [data-testid="stHorizontalBlock"] {
+      flex-wrap:nowrap!important; gap:6px!important; min-width:700px;
+    }
+    .st-key-cm_analysis_grid [data-testid="stColumn"] {min-width:0!important;}
+    .st-key-cm_analysis_grid [data-testid="stVerticalBlock"] {gap:2px;}
+    .st-key-cm_analysis_grid [data-testid="stMarkdownContainer"] p {
+      margin:0; padding:5px 0; font-size:13px; overflow-wrap:anywhere;
+    }
+    .st-key-cm_analysis_grid [data-testid="stText"] {font:inherit; font-size:13px; white-space:normal;}
+    .st-key-cm_analysis_grid button {min-height:36px; padding:3px 5px;}
+    .st-key-cm_analysis_grid button p {padding:0;}
+    .st-key-cm_analysis_grid [data-testid="stVerticalBlockBorderWrapper"] {overflow:auto;}
+    </style>''', unsafe_allow_html=True)
+    widths = (2.1, .85, .8, .8, .9, 1.4, 1.4, 1.5)
+    with st.container(height=415, key='cm_analysis_grid'):
+        for col, label in zip(st.columns(widths, vertical_alignment='center'),
+                              ('単元', '正答率', '正解数', '採点数', '学習回数', '最終学習日', '重点単元', '修了認定')):
+            col.markdown(f'**{label}**')
+        for key, entry in visible:
+            cols = st.columns(widths, vertical_alignment='center')
+            values = (
+                entry['label'], f"{rate(entry):.0%}" if entry['total'] else '—',
+                entry['correct'] if entry['total'] else '—', entry['total'], len(entry['attempts']),
+                entry['last'].astimezone(TOKYO).date().isoformat() if entry['last'] else '—',
+            )
+            for col, value in zip(cols, values):
+                col.text(str(value))
+            if not entry['menu_id']:
+                cols[6].text('—')
+                cols[7].text('未連携')
+                continue
+            unit_key = hashlib.sha256(json.dumps([source, key], ensure_ascii=False).encode()).hexdigest()[:20]
+            for col, kind, active, version, labels in (
+                (cols[6], 'focus', entry['focused'], entry['focus'].get('version'), ('重点にする', '重点中・解除')),
+                (cols[7], 'unit', entry['graduated'], entry['certificate'].get('version'), ('認定する', '認定済み・取消')),
+            ):
+                with col:
+                    if cm_button(labels[active], key=f'cm_analysis_{kind}_{unit_key}_{version}_{active}',
+                                 type='primary' if active else 'secondary', use_container_width=True,
+                                 help=entry['label'], disabled=kind == 'focus' and entry['graduated']):
+                        try:
+                            cm_analysis_set_unit(source, entry['menu_id'], kind, not active, version)
+                        except (RuntimeError, ValueError, TypeError, KeyError) as exc:
+                            cm_diag_record('operation', 'cm_analysis_set_unit', status='error', error=exc)
+                            st.session_state['cm_analysis_error'] = (
+                                str(exc) if isinstance(exc, ValueError) else '保存できませんでした。「記録を更新」で確認してください。')
+                        else:
+                            st.session_state.pop('cm_plan_snapshot', None)
+                            verb = ('重点を解除しました。' if active else '重点単元に設定しました。') if kind == 'focus' else (
+                                '修了認定を取り消しました。' if active else '修了認定しました。')
+                            st.session_state['cm_analysis_message'] = entry['label'] + 'の' + verb if active else entry['label'] + 'を' + verb
+                        st.rerun()
 
-    choices = {key: entry for key, entry in visible if entry['menu_id']}
-    if not choices:
-        return
-    from collections import Counter
-    labels = Counter(entry['label'] for entry in choices.values())
-    with st.container(border=True):
-        st.markdown('**単元の修了認定**')
-        unit_key = st.selectbox('対象の単元', choices, index=None, placeholder='単元を選択',
-                                format_func=lambda key: choices[key]['label'] if labels[choices[key]['label']] == 1
-                                else f'{choices[key]["label"]}（{choices[key]["menu_id"]}）',
-                                key='cm_analysis_unit_' + source)
-        st.caption('認定した単元は、次回作成される「きょう やること」の候補から外れます。')
-        if unit_key is None:
-            return
-        entry = choices[unit_key]
-        certify = not entry['graduated']
-        action = '修了認定する' if certify else '修了認定を取り消す'
-        version = entry['certificate'].get('version')
-        button_key = f'cm_analysis_certificate_{source}_{entry["menu_id"]}_{version}_{certify}'
-        if cm_button(action, key=button_key, type='primary' if certify else 'secondary'):
-            try:
-                cm_analysis_certificate(source, entry['menu_id'], certify, version)
-            except ValueError as exc:
-                cm_error(str(exc))
-            except (RuntimeError, TypeError, KeyError) as exc:
-                cm_diag_record('operation', 'cm_analysis_certificate', status='error', error=exc)
-                cm_error('修了認定を変更できませんでした。「記録を更新」で確認してください。')
-            else:
-                st.session_state.pop('cm_plan_snapshot', None)
-                st.session_state['cm_analysis_message'] = ('修了認定しました。' if certify else '修了認定を取り消しました。')
-                st.rerun()
+    st.caption('正答率は自動採点された最初の回答で集計します。過去の記録は、保存済みの正解数と出題数を使います。')
+    st.caption('重点単元は「きょう やること」で優先します。修了認定すると重点を解除します。')
 
 
 def cm_graduation_states(profile=None):
     profile=profile or st.session_state['cm_profile']
     return cm_plan_rows('chokomana_graduation_states',{'profile_id':'eq.'+profile,'select':'profile_id,source_app,items,revision','order':'source_app'})
+
+
+def cm_focused_menus(states):
+    return {(row['source_app'], key[6:]) for row in states for key, item in (row.get('items') or {}).items()
+            if key.startswith('focus:') and isinstance((item or {}).get('record'), dict)}
+
+
+def cm_focus_fingerprint(focus):
+    return hashlib.sha256(json.dumps(sorted(focus)).encode()).hexdigest() if focus else ''
 
 
 def cm_graduation_fingerprint(states):
@@ -4642,10 +4687,11 @@ def cm_append_geography_task(payload, menus, assigned_at):
     if not eligible:
         return payload
     # Prefer a short course when adding to a plan that is already assigned.
-    menu = min(eligible, key=lambda m: (m["estimated_duration_ms"], m["menu_id"]))
+    menu = min(eligible, key=lambda m: (not m.get("focused"), m["estimated_duration_ms"], m["menu_id"]))
     duration = int(menu["estimated_duration_ms"])
     item = {**menu, "plan_item_id": str(uuid4()), "assigned_at": assigned_at,
-            "duration_ms": duration, "duration_basis": "provisional", "reason": "地図パズルで 地方を まなぶ",
+            "duration_ms": duration, "duration_basis": "provisional",
+            "reason": "重点単元の練習" if menu.get("focused") else "地図パズルで 地方を まなぶ",
             "repetitions": 1, "available_repetitions": 1, "today_completed_count": 0,
             "completed_count": 0, "completed_attempts": [], "medals": [], "done": False}
     progress_fields = ("source_app","menu_id","content_version","estimated_duration_ms",
@@ -4697,15 +4743,21 @@ def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
     from uuid import uuid4
     profile=st.session_state['cm_profile'];today=now_jst().date();now=datetime.now(timezone.utc).isoformat()
     geography_ready = allowed_sources is not None and "geography" in allowed_sources
-    saved=cm_saved_daily_plan(profile,today)
-    if saved is not None:
-        return cm_refresh_saved_daily_plan(saved,profile,today,geography_ready=geography_ready)
+    previous=cm_saved_daily_plan(profile,today)
+    graduation_states=cm_graduation_states(profile) if graduation_states is None else graduation_states
+    focus=cm_focused_menus(graduation_states)
+    focus_fingerprint=cm_focus_fingerprint(focus)
+    if previous and previous['payload'].get('focus_fingerprint', '') == focus_fingerprint:
+        return cm_refresh_saved_daily_plan(previous,profile,today,geography_ready=geography_ready)
     bundle=cm_account_request('POST','/rpc/cm_hub_plan_bundle_v1',{'p_profile':profile})
     if not isinstance(bundle,dict) or bundle.get('profile_id')!=profile:raise RuntimeError('invalid planner bundle owner')
     catalog=bundle.get('catalog');events=bundle.get('events');all_medals=bundle.get('medals')
     if not all(isinstance(v,list) for v in (catalog,events,all_medals)):raise RuntimeError('invalid planner bundle')
-    previous=bundle.get('previous')
-    if previous:return cm_refresh_saved_daily_plan(previous,profile,today,geography_ready=geography_ready)
+    previous=bundle.get('previous') or previous
+    if previous and previous['payload'].get('focus_fingerprint', '') == focus_fingerprint:
+        return cm_refresh_saved_daily_plan(previous,profile,today,geography_ready=geography_ready)
+    if previous:
+        age=previous['payload']['age']
     if geography_ready:
         try:
             geography = cm_account_request('POST', '/rpc/cm_geography_plan_data_v1', {'p_profile':profile})
@@ -4726,11 +4778,10 @@ def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
             events = [row for row in events if row.get('source_app')!='geography'] + geography['events']
             all_medals = [row for row in all_medals if row.get('source_app')!='geography'] + geography['medals']
     menus=cm_plan_menus(catalog,age)
-    graduation_states=cm_graduation_states(profile) if graduation_states is None else graduation_states
     graduation_fingerprint=cm_graduation_fingerprint(graduation_states)
     graduated=cm_graduated_menus(menus,graduation_states)
     stamps=[r for r in all_medals if r.get('study_date')==today.isoformat()]
-    old={}
+    old=previous['payload'] if previous else {}
     analysis=cm_medal_progress(cm_plan_analyze(events,menus,profile,today),all_medals,menus,events,profile,today)
     extras=analysis.get('legacy_medal_ms_by_source',{})
     subject_spent=cm_plan_subject_time(events,menus,profile,today,max(0,analysis['spent_ms']-sum(extras.values())))
@@ -4740,10 +4791,11 @@ def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
         if (m['source_app'],m['menu_id']) in graduated:
             analysis['stats'].setdefault((m['source_app'],m['menu_id'],m['content_version']),{})['graduated']=True
     kuku_ready=cm_soroban_kuku_ready(menus,analysis)
-    candidates=[c for c in cm_plan_candidates(menus,analysis,today) if (c['source_app'],c['menu_id']) not in graduated]
+    candidates=[c for c in cm_plan_candidates(menus,analysis,today,focus - graduated) if (c['source_app'],c['menu_id']) not in graduated]
     if allowed_sources is not None:candidates=[c for c in candidates if c['source_app'] in allowed_sources]
     balance_sources=sorted({c['source_app'] for c in candidates})
     rebalance=(old.get('kuku_ready')!=kuku_ready or old.get('graduation_fingerprint')!=graduation_fingerprint or old.get('planner_version')!=CM_PLANNER_VERSION or old.get('balance_sources')!=balance_sources or old.get('age')!=age or old.get('medal_progress_fingerprint')!=analysis['medal_progress_fingerprint'])
+    rebalance=rebalance or old.get('focus_fingerprint', '') != focus_fingerprint
     created=old.get('generated_at') or now
     items=[]
     for row in old.get('items',[]):
@@ -4754,7 +4806,25 @@ def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
     for item in items:cm_medal_candidate(item,analysis)
     # Upgrade only untouched work. Preserve finished cards, partial work, IDs and medals.
     if rebalance:
-        items=[i for i in items if i['completed_count'] or cm_plan_started(i,events)]
+        ended = {(e['source_app'], e['attempt_id']) for e in events if e['event_type'] == 'session_ended'}
+        open_starts = [e for e in events if e['event_type'] == 'session_started'
+                       and (e['source_app'], e['attempt_id']) not in ended]
+        preserved = []
+        current = {tuple(c['key']): c for c in candidates}
+        for item in items:
+            open_attempt = not item['done'] and cm_plan_started(item, open_starts)
+            if not item['completed_count'] and not open_attempt:
+                continue
+            item['repetitions'] = item['completed_count'] + int(open_attempt)
+            item['done'] = not open_attempt
+            candidate = current.get((item['source_app'], item['menu_id'], item['content_version']))
+            item['focused'] = (item['source_app'], item['menu_id']) in focus
+            if candidate:
+                item['score'], item['reason'] = candidate['score'], candidate['reason']
+            elif not item['focused'] and item['reason'] == '重点単元の練習':
+                item['reason'] = '単元の練習'
+            preserved.append(item)
+        items = preserved
     needs_items=rebalance or not items or all(i['done'] for i in items)
     required_kuku_id=None
     if kuku_ready and not reached and cm_kuku_today_count(analysis)==0:
@@ -4775,8 +4845,13 @@ def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
             committed[i['source_app']]=committed.get(i['source_app'],0)+amount
             key=(i['source_app'],i['menu_id'],i['content_version']);counts[key]=counts.get(key,0)+left
         for row in cm_build_daily_plan(candidates,max(0,remaining-reserved),counts,committed):
-            items.append({**row,'plan_item_id':str(uuid4()),'assigned_at':now,'completed_count':0,
-                'completed_attempts':[],'medals':[],'done':False})
+            matching = next((i for i in items if (i['source_app'], i['menu_id'], i['content_version']) == tuple(row['key'])), None)
+            if matching:
+                matching['repetitions'] += row['repetitions']
+                matching['done'] = False
+            else:
+                items.append({**row,'plan_item_id':str(uuid4()),'assigned_at':now,'completed_count':0,
+                    'completed_attempts':[],'medals':[],'done':False})
     # Allocate only the remaining budget, without removing finished or postponed cards.
     pending=[];limits={}
     for i in items:
@@ -4795,6 +4870,7 @@ def cm_load_daily_plan(age, allowed_sources=None, graduation_states=None):
         'planned_ms':planned,'items':items,'sources':sorted({m['source_app'] for m in menus}),
         'reached':reached,'sufficient':reached or planned>=remaining*.95,'generated_at':created,'refreshed_at':now}
     payload['daily_fixed']=True
+    payload['focus_fingerprint']=focus_fingerprint
     progress_fields=('source_app','menu_id','content_version','estimated_duration_ms','category_id','difficulty_id','label','assessment_method')
     payload['progress_menus']=[{k:m[k] for k in progress_fields if k in m} for m in menus]
     if geography_ready:
