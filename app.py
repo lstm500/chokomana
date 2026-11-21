@@ -790,13 +790,13 @@ function pcm(base64){
  const threshold=Math.max(.0008,peak*.012),maxTrim=Math.floor(raw.length*.04);
  let left=0,right=levels.length;while(left<right&&levels[left]<threshold)left++;while(right>left&&levels[right-1]<threshold)right--;
  const first=Math.min(maxTrim,Math.max(0,(left-1)*windowSize)),last=Math.max(raw.length-maxTrim,Math.min(raw.length,(right+1)*windowSize));
- const trimmed=raw.slice(first,last),speed=1.06,out=new Float32Array(Math.ceil(trimmed.length/speed));for(let i=0;i<out.length;i++){const at=i*speed,lo=Math.floor(at),f=at-lo;out[i]=(trimmed[lo]||0)*(1-f)+(trimmed[lo+1]||0)*f}return out;
+ const trimmed=raw.slice(first,last),speed=.93,out=new Float32Array(Math.ceil(trimmed.length/speed));for(let i=0;i<out.length;i++){const at=i*speed,lo=Math.floor(at),f=at-lo;out[i]=(trimmed[lo]||0)*(1-f)+(trimmed[lo+1]||0)*f}return out;
 }
 function stampIndex(beats,elapsed){let low=0,high=beats.length;while(low<high){const mid=(low+high)>>1;if(beats[mid]<=elapsed)low=mid+1;else high=mid}return low-1}
 function makeTrack(ac){
- const sr=VOICE_SAMPLE_RATE,leadFrames=Math.round(.06*sr),voiceClips=items.map(x=>clips[key(x.reading)]?pcm(clips[key(x.reading)]):new Float32Array(Math.round(.5*sr))),offsets=[];
+ const sr=VOICE_SAMPLE_RATE,leadFrames=Math.round(.06*sr),overlapFrames=Math.round(.045*sr),voiceClips=items.map(x=>clips[key(x.reading)]?pcm(clips[key(x.reading)]):new Float32Array(Math.round(.5*sr))),offsets=[];
  let cursor=leadFrames;
- voiceClips.forEach((clip,i)=>{offsets.push(cursor);cursor+=clip.length;if(i+1<voiceClips.length)cursor-=Math.min(Math.round(.075*sr),Math.floor(clip.length/3),Math.floor(voiceClips[i+1].length/3))});
+ voiceClips.forEach((clip,i)=>{offsets.push(cursor);cursor+=clip.length;if(i+1<voiceClips.length)cursor-=Math.min(overlapFrames,Math.floor(clip.length/3),Math.floor(voiceClips[i+1].length/3))});
  const finale=(cursor+Math.round(.025*sr))/sr,beats=offsets.map(x=>x/sr);
  const buffer=ac.createBuffer(1,Math.ceil((finale+.72)*sr),sr),out=buffer.getChannelData(0);
  // Restore the original warm robot glide: 196Hz to 784Hz over the whole collection.
@@ -815,8 +815,8 @@ function makeTrack(ac){
   const level=medalVolume(x.grade),start=offsets[i],at=beats[i],clip=voiceClips[i],span=(i+1<offsets.length?offsets[i+1]-start:clip.length)/sr;
   // Voice and instruments are mixed into the same PCM samples, not separate clocks.
   // Equal-power joins avoid the dip of a linear fade at each word boundary.
-  const fadeIn=i?Math.min(Math.round(.075*sr),Math.floor(clip.length/3),Math.floor(voiceClips[i-1].length/3)):Math.min(Math.round(.004*sr),Math.floor(clip.length/3));
-  const fadeOut=i+1<voiceClips.length?Math.min(Math.round(.075*sr),Math.floor(clip.length/3),Math.floor(voiceClips[i+1].length/3)):Math.min(Math.round(.004*sr),Math.floor(clip.length/3));
+  const fadeIn=i?Math.min(overlapFrames,Math.floor(clip.length/3),Math.floor(voiceClips[i-1].length/3)):Math.min(Math.round(.004*sr),Math.floor(clip.length/3));
+  const fadeOut=i+1<voiceClips.length?Math.min(overlapFrames,Math.floor(clip.length/3),Math.floor(voiceClips[i+1].length/3)):Math.min(Math.round(.004*sr),Math.floor(clip.length/3));
   for(let j=0;j<clip.length&&start+j<out.length;j++){const blend=Math.min(1,fadeIn?j/fadeIn:1,fadeOut?(clip.length-1-j)/fadeOut:1),edge=Math.sin(blend*Math.PI/2);out[start+j]+=clip[j]*VOICE_GAIN*edge*level}
   const hz=196*Math.pow(4,i/Math.max(1,items.length-1)),previous=i?196*Math.pow(4,(i-1)/Math.max(1,items.length-1))*.94:null;
   melody(at,hz,previous,span+.08,level);
@@ -830,7 +830,7 @@ function makeTrack(ac){
 function speakMedal(item, done, failed){
  if(!window.speechSynthesis||!window.SpeechSynthesisUtterance){failed?.();return}
  const u=new SpeechSynthesisUtterance(item.reading);
- u.lang='ja-JP';u.rate=1.50;u.pitch=1.5;u.volume=Math.min(1,medalVolume(item.grade));voice=u;
+ u.lang='ja-JP';u.rate=1.30;u.pitch=1.5;u.volume=Math.min(1,medalVolume(item.grade));voice=u;
  u.onend=done||null;u.onerror=failed||null;
  try{window.speechSynthesis.speak(u)}catch(error){failed?.()}
 }
@@ -2282,18 +2282,17 @@ def render_navigation() -> None:
 
 def _open_today() -> None:
     st.session_state.cm_page = "today"
-    st.session_state.cm_today_requested = True
+    _invalidate_today()
+
+
+def _invalidate_today() -> None:
+    st.session_state.cm_today_loaded_for = None
     st.session_state.cm_today_rows = None
     st.session_state.cm_today_error = None
 
 
-def _load_today_if_requested(url: str, key: str, profile: str, missing: list[str]) -> None:
-    if not st.session_state.get("cm_today_requested"):
-        return
-    day = now_jst().date()
-    if st.session_state.get("cm_today_loaded_for") == day:
-        return
-    st.session_state.cm_today_loaded_for = day
+def _load_today(url: str, key: str, profile: str, missing: list[str], day: date) -> None:
+    st.session_state.cm_today_loaded_for = (profile, day)
     if missing:
         st.session_state.cm_today_error = "Supabase接続設定が不足しています。"
         st.session_state.cm_today_rows = None
@@ -2579,16 +2578,14 @@ def render_today(url: str, key: str, profile: str, missing: list[str]) -> None:
     st.markdown('<div class="cm-page-heading">今日の成果</div>', unsafe_allow_html=True)
     today = now_jst().date()
     st.markdown(f'<div class="cm-note">{html.escape(date_label(today))} · 日本時間</div>', unsafe_allow_html=True)
-    if cm_button("最新のスタンプを読み込む", key="refresh_today", use_container_width=True):
-        st.session_state.cm_today_requested = True
-        st.session_state.cm_today_loaded_for = None
-    if not st.session_state.get("cm_today_requested"):
-        st.info("「最新のスタンプを読み込む」を押すと、今日獲得したスタンプを表示します。")
-        return
-    with st.spinner("スタンプを確認しています…"):
-        _load_today_if_requested(url, key, profile, missing)
+    if st.session_state.get("cm_today_loaded_for") != (profile, today):
+        with st.spinner("スタンプを確認しています…"):
+            _load_today(url, key, profile, missing, today)
     if st.session_state.get("cm_today_error"):
         cm_error(st.session_state.cm_today_error)
+        if not missing:
+            cm_button("もう一度読み込む", key="retry_today", use_container_width=True,
+                      on_click=_invalidate_today)
         return
     rows = st.session_state.get("cm_today_rows")
     if rows is not None:
@@ -2637,9 +2634,7 @@ def _day_transition() -> None:
     day = now_jst().date()
     if st.session_state.cm_jst_day != day:
         st.session_state.cm_jst_day = day
-        st.session_state.cm_today_rows = None
-        st.session_state.cm_today_loaded_for = None
-        st.session_state.cm_today_requested = False
+        _invalidate_today()
         st.rerun()
 
 
