@@ -790,7 +790,7 @@ function pcm(base64){
  const threshold=Math.max(.0008,peak*.012),maxTrim=Math.floor(raw.length*.04);
  let left=0,right=levels.length;while(left<right&&levels[left]<threshold)left++;while(right>left&&levels[right-1]<threshold)right--;
  const first=Math.min(maxTrim,Math.max(0,(left-1)*windowSize)),last=Math.max(raw.length-maxTrim,Math.min(raw.length,(right+1)*windowSize));
- const trimmed=raw.slice(first,last),speed=1.18,out=new Float32Array(Math.ceil(trimmed.length/speed));for(let i=0;i<out.length;i++){const at=i*speed,lo=Math.floor(at),f=at-lo;out[i]=(trimmed[lo]||0)*(1-f)+(trimmed[lo+1]||0)*f}return out;
+ const trimmed=raw.slice(first,last),speed=1.06,out=new Float32Array(Math.ceil(trimmed.length/speed));for(let i=0;i<out.length;i++){const at=i*speed,lo=Math.floor(at),f=at-lo;out[i]=(trimmed[lo]||0)*(1-f)+(trimmed[lo+1]||0)*f}return out;
 }
 function stampIndex(beats,elapsed){let low=0,high=beats.length;while(low<high){const mid=(low+high)>>1;if(beats[mid]<=elapsed)low=mid+1;else high=mid}return low-1}
 function makeTrack(ac){
@@ -830,7 +830,7 @@ function makeTrack(ac){
 function speakMedal(item, done, failed){
  if(!window.speechSynthesis||!window.SpeechSynthesisUtterance){failed?.();return}
  const u=new SpeechSynthesisUtterance(item.reading);
- u.lang='ja-JP';u.rate=1.65;u.pitch=1.5;u.volume=Math.min(1,medalVolume(item.grade));voice=u;
+ u.lang='ja-JP';u.rate=1.50;u.pitch=1.5;u.volume=Math.min(1,medalVolume(item.grade));voice=u;
  u.onend=done||null;u.onerror=failed||null;
  try{window.speechSynthesis.speak(u)}catch(error){failed?.()}
 }
