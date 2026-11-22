@@ -8,6 +8,7 @@ daily speech awards in public.chokomana_speech_medals (see speech_medals.sql).
 Deploy: rename this file to app.py in the hub's own GitHub repository.
 Apply the current subject_balance.sql to the hub's Supabase database to enable
 school-subject percentages and study source preferences.
+Apply train_new_badge.sql to enable the 72-hour NEW badge in the train collection.
 Streamlit Cloud already provides streamlit; this file uses only Python stdlib
 for Supabase REST requests (no supabase-py dependency).
 
@@ -17,6 +18,7 @@ Required Streamlit Secrets:
   SUPABASE_PUBLISHABLE_KEY = "<optional, public key; built-in default>"
 
 Optional Streamlit Secrets:
+  MIMAMORI_APP_URL = "https://...streamlit.app"
   KOTOBA_APP_URL = "https://...streamlit.app"
   SOROBAN_APP_URL = "https://...streamlit.app"
   GEOMETRY_APP_URL = "https://...streamlit.app"
@@ -86,9 +88,9 @@ APP_DEFINITIONS = (
     {"id": "kotoba", "title": "こくご・ことば", "tag": "ことばを広げる", "symbol": "言", "secret": "KOTOBA_APP_URL", "icon": "あ"},
     {"id": "soroban", "title": "そろばん", "tag": "計算にチャレンジ", "symbol": "算", "secret": "SOROBAN_APP_URL", "icon": "123"},
     {"id": "geometry", "title": "ずけいのアトリエ", "tag": "図形で考える", "symbol": "図", "secret": "GEOMETRY_APP_URL", "icon": "△"},
-    {"id": "moji", "title": "ひらがな・カタカナ", "tag": "もじを かこう", "symbol": "字", "secret": "MOJI_APP_URL", "icon": "あア"},
-    {"id": "english", "title": "えいご・ジュニア", "tag": "おとと ことばで あそぼう", "symbol": "英", "secret": "ENGLISH_APP_URL", "icon": "ABC"},
     {"id": "geography", "title": "しゃかい・ちり", "tag": "日本地図パズル", "symbol": "地", "secret": "GEOGRAPHY_APP_URL", "icon": "地"},
+    {"id": "english", "title": "えいご・ジュニア", "tag": "おとと ことばで あそぼう", "symbol": "英", "secret": "ENGLISH_APP_URL", "icon": "ABC"},
+    {"id": "moji", "title": "ひらがな・カタカナ", "tag": "もじを かこう", "symbol": "字", "secret": "MOJI_APP_URL", "icon": "あア"},
     {"id": "reading", "title": "ほんのともだち", "tag": "ほんを よむ おてつだい", "symbol": "読", "secret": "READING_APP_URL", "icon": "📖"},
 )
 
@@ -2061,10 +2063,14 @@ CM_TRAIN_STYLE = """<style>
   outline:3px solid #2383c8;outline-offset:3px
 }
 .cm-train-prize-headline{font-size:clamp(1.05rem,4.6vw,1.35rem);font-weight:850}
+.cm-train-prize-visual{position:relative;width:min(12rem,50vw,36vh);margin:0 auto}
 .cm-train-prize-image{
-  display:block;width:min(12rem,50vw,36vh);height:auto;aspect-ratio:1;object-fit:contain;
-  margin:0 auto
+  display:block;width:100%;height:auto;aspect-ratio:1;object-fit:contain
 }
+.cm-train-new-badge{display:inline-block;padding:.16em .55em;border-radius:999px;
+  background:#b62318;color:#fff;font-size:.74rem;font-weight:850;line-height:1.2;letter-spacing:.04em}
+.cm-train-prize-visual .cm-train-new-badge{position:absolute;top:.22rem;left:50%;transform:translateX(-50%);
+  font-size:clamp(1.15rem,5vw,1.55rem);border:2px solid #fff;box-shadow:0 2px 7px #53261f45}
 .cm-train-prize-name{font-size:clamp(1rem,4.1vw,1.28rem);font-weight:800}
 .cm-train-prize-series{font-size:.95rem;margin-top:1px}
 .cm-train-collection{
@@ -2075,7 +2081,7 @@ CM_TRAIN_STYLE = """<style>
   text-align:center;line-height:1.3;min-width:0;font:inherit;cursor:pointer}
 .cm-train-card-art{display:block;width:min(90%,122px);aspect-ratio:1;object-fit:contain}
 .cm-train-card strong{font-size:.9rem}
-.cm-train-card-summary{color:#284e69;font-size:.82rem}
+.cm-train-card-summary{display:flex;align-items:center;justify-content:center;gap:.35rem;color:#284e69;font-size:.82rem}
 .cm-train-card-more{font-size:.76rem;color:#275d85;text-decoration:underline}
 .cm-train-detail{width:min(32rem,calc(100% - 1.5rem));max-height:calc(100dvh - 2rem);
   box-sizing:border-box;margin:auto;padding:clamp(14px,4vw,26px);border:2px solid #aac5d5;
@@ -2127,15 +2133,17 @@ def cm_train_reel_cell(train=None, *, matched=False, decorative=False):
     return f'<div class="cm-train-cell{state}">{face}</div>'
 
 
-def cm_train_prize_popup(train):
+def cm_train_prize_popup(train, *, is_new=False):
     line, series, artwork = CM_TRAIN_SYMBOLS[train]
     destination, feature = CM_TRAIN_DETAILS[train]
+    badge = '<span class="cm-train-new-badge" aria-label="はじめてゲット">NEW</span>' if is_new else ''
     return (
         '<details class="cm-train-prize" open="open">'
         '<summary class="cm-train-prize-summary">とじる</summary>'
         '<div role="status" aria-live="polite">'
         '<div class="cm-train-prize-headline">このメダルが あたったよ！</div>'
-        f'<img class="cm-train-prize-image" src="data:image/webp;base64,{artwork}" alt="" />'
+        f'<div class="cm-train-prize-visual">{badge}'
+        f'<img class="cm-train-prize-image" src="data:image/webp;base64,{artwork}" alt="" /></div>'
         f'<div class="cm-train-prize-name">{html.escape(line)}</div>'
         f'<div class="cm-train-prize-series">{html.escape(series)}</div>'
         f'<div class="cm-train-feature">{html.escape(feature)}<br />{html.escape(destination)}</div>'
@@ -2143,7 +2151,7 @@ def cm_train_prize_popup(train):
     )
 
 
-def cm_train_board(result, animate=False, *, spinning=False):
+def cm_train_board(result, animate=False, *, spinning=False, is_new=False):
     board = (result or {}).get("board") or []
     complete = len(board) == 9
     animate = animate and complete
@@ -2179,7 +2187,7 @@ def cm_train_board(result, animate=False, *, spinning=False):
         for line, key in CM_TRAIN_REPRESENTATIVES.items()
     ) if complete or spinning else ""
     motion = " cm-train-reveal" if animate else " cm-train-spinning" if spinning else ""
-    popup = cm_train_prize_popup(prize) if animate and prize in CM_TRAIN_SYMBOLS else ""
+    popup = cm_train_prize_popup(prize, is_new=is_new) if animate and prize in CM_TRAIN_SYMBOLS else ""
     return (f'<section class="cm-train-machine{motion}" aria-label="電車ルーレット" '
             f'style="--finish:{CM_TRAIN_REEL_STOPS[-1]}ms;{artwork}">'
             f'<div class="cm-train-grid">{"".join(windows)}</div>'
@@ -2203,6 +2211,11 @@ CM_TRAIN_COLLECTION_POPUP = """<dialog class="cm-train-detail" id="cm-train-deta
 (() => {
   const root = document.currentScript.parentElement;
   const popup = root.querySelector("dialog");
+  for (const badge of root.querySelectorAll("[data-new-until]")) {
+    const ms = Date.parse(badge.dataset.newUntil) - Date.now();
+    if (ms > 0) window.setTimeout(() => badge.remove(), ms);
+    else badge.remove();
+  }
   root.querySelector(".cm-train-collection").addEventListener("click", event => {
     const card = event.target.closest(".cm-train-card");
     if (!card || popup.open) return;
@@ -2218,7 +2231,20 @@ CM_TRAIN_COLLECTION_POPUP = """<dialog class="cm-train-detail" id="cm-train-deta
 </script>"""
 
 
-def cm_train_collection(collection, pending_prize=None):
+def cm_train_recent_new(overview, *, now=None):
+    now = now or datetime.now(timezone.utc)
+    recent = {}
+    for train, acquisition in (overview.get("new_trains") or {}).items():
+        if train not in CM_TRAIN_SYMBOLS or not isinstance(acquisition, dict):
+            continue
+        expires = cm_plan_date(acquisition.get("new_until"))
+        if expires and expires > now:
+            recent[train] = (acquisition.get("request_id"), expires.isoformat())
+    return recent
+
+
+def cm_train_collection(collection, pending_prize=None, *, recent_new=None):
+    recent_new = recent_new or {}
     cards = []
     already_owned = False
     for train, (line, series, artwork) in CM_TRAIN_SYMBOLS.items():
@@ -2234,6 +2260,10 @@ def cm_train_collection(collection, pending_prize=None):
                      f'<span class="cm-train-count-after">{owned}まい</span>')
         destination, feature = CM_TRAIN_DETAILS[train]
         image = f'data:image/webp;base64,{artwork}'
+        badge = ""
+        if train in recent_new:
+            expires = html.escape(recent_new[train][1], quote=True)
+            badge = f'<span class="cm-train-new-badge" data-new-until="{expires}">NEW</span>'
         cards.append(
             f'<button type="button" class="cm-train-card{state}" aria-haspopup="dialog" '
             f'aria-controls="cm-train-detail" data-line="{html.escape(line, quote=True)}" '
@@ -2241,7 +2271,7 @@ def cm_train_collection(collection, pending_prize=None):
             f'data-feature="{html.escape(feature, quote=True)}">'
             f'<img class="cm-train-card-art" src="{image}" loading="lazy" alt="" />'
             f'<strong>{html.escape(line)}<br />{html.escape(series)}</strong>'
-            f'<span class="cm-train-card-summary">{count}</span>'
+            f'<span class="cm-train-card-summary">{count}{badge}</span>'
             '<span class="cm-train-card-more">くわしく見る</span></button>')
     empty_message = "あたりが出ると、ここに電車メダルがならびます。"
     if cards:
@@ -2306,7 +2336,20 @@ def render_train_roulette(profile):
         return
 
     new_result = spin if spin and spin["status"] == "ok" else None
-    board_slot.html(cm_train_board(new_result or overview.get("latest"), bool(new_result)))
+    collection = overview.get("collection", {})
+    recent_new = cm_train_recent_new(overview)
+    pending_prize = (new_result or {}).get("prize_train")
+    if len((new_result or {}).get("board") or ()) != 9 or pending_prize not in CM_TRAIN_SYMBOLS:
+        pending_prize = None
+    is_new = False
+    if pending_prize:
+        if "new_trains" in overview:
+            first_win = recent_new.get(pending_prize)
+            is_new = bool(first_win and first_win[0] == new_result.get("request_id"))
+        else:
+            # Older database versions still identify an unambiguous first win at reveal.
+            is_new = collection.get(pending_prize) == 1
+    board_slot.html(cm_train_board(new_result or overview.get("latest"), bool(new_result), is_new=is_new))
     if notice:
         st.info(notice)
     balances = overview.get("balances", {})
@@ -2327,10 +2370,7 @@ def render_train_roulette(profile):
                               args=(profile, grade))
                     st.caption(f"1枚で{rounds}回 · {lines}")
     st.subheader("電車コレクション")
-    pending_prize = (new_result or {}).get("prize_train")
-    if len((new_result or {}).get("board") or ()) != 9:
-        pending_prize = None
-    cm_train_collection(overview.get("collection", {}), pending_prize)
+    cm_train_collection(collection, pending_prize, recent_new=recent_new)
 
 
 def cm_mimamori_url() -> str:
@@ -2340,9 +2380,7 @@ def cm_mimamori_url() -> str:
 
 def render_navigation() -> None:
     labels = (("home", "ホーム"), ("roulette", "電車ルーレット"), ("today", "今日の成果"),
-              ("history", "過去のスタンプ"))
-    if not cm_mimamori_url():
-        labels += (("analysis", "分析・管理"),)
+              ("history", "過去のスタンプ"), ("analysis", "分析・管理"))
     with st.container(key="cm_navigation"):
         cols = st.columns(len(labels), gap="small")
         for col, (page, label) in zip(cols, labels):
@@ -2513,6 +2551,15 @@ def render_home(apps: list[dict]) -> None:
         if general:st.markdown('<div id="cm-general-support">'+general+'</div>',unsafe_allow_html=True)
     except RuntimeError:pass
     with st.container(key="cm_home_heading"):
+        st.markdown('''<style>@media(max-width:640px){
+          .cm-subject-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding-bottom:8px}
+          .cm-subject-grid>.cm-subject:last-child:nth-child(odd){grid-column:auto;flex-direction:column;gap:5px}
+          .cm-subject{gap:5px;padding:8px 4px;border-radius:14px}
+          .cm-subject-icon{width:34px;height:34px}
+          .cm-subject-label,.cm-subject-geography .cm-subject-label{font-size:clamp(12px,3.4vw,17px)}
+          .cm-subject-geography .cm-subject-label{white-space:normal;text-align:center}
+          .cm-subject-go{white-space:normal;text-align:center;font-size:11px;padding:2px 5px}
+        }</style>''', unsafe_allow_html=True)
         heading, settings_button = st.columns([5, 1], gap="small", vertical_alignment="center")
         with heading:
             st.markdown('<h2 class="cm-home-question">なにを まなぶ？</h2>', unsafe_allow_html=True)
@@ -2527,7 +2574,11 @@ def render_home(apps: list[dict]) -> None:
     launch_cards()
     @st.fragment(run_every=10)
     def daily_assignments():
-        event = cm_plan_return_event()
+        try:
+            event = cm_plan_return_event()
+        except (RuntimeError, OSError) as exc:
+            cm_diag_record('operation', 'cm_plan_return_bridge', status='error', error=exc)
+            event = None
         began = time.perf_counter()
         render_daily_plan(apps, event)
         cm_diag_mark_ready()
@@ -2797,9 +2848,6 @@ def main() -> None:
         render_receipts()
         return
     if st.session_state.cm_page == "analysis":
-        if cm_mimamori_url():
-            st.session_state.cm_page = 'settings'
-            st.rerun()
         render_analysis_management()
         return
     if st.session_state.cm_page == "settings":
@@ -2808,8 +2856,12 @@ def main() -> None:
     if st.session_state.cm_page == "roulette":
         render_train_roulette(st.session_state["cm_profile"])
         return
-    apps = [{**spec, "url": _setting(spec["secret"]),
-             "ready": linked and _valid_https_url(_setting(spec["secret"]))} for spec in APP_DEFINITIONS]
+    apps = []
+    for spec in APP_DEFINITIONS:
+        app_url = _setting(spec["secret"])
+        if spec["id"] == "geography" and not _valid_https_url(app_url):
+            app_url = DEFAULT_GEOGRAPHY_APP_URL
+        apps.append({**spec, "url": app_url, "ready": _valid_https_url(app_url)})
     if st.session_state.cm_page == "home":
         render_home(apps)
         return
@@ -3664,10 +3716,11 @@ def cm_plan_rows(table, params):
     raise RuntimeError('learning history pagination limit reached')
 
 
-def cm_plan_settings():
+def cm_plan_settings(*, refresh=False):
     profile = st.session_state['cm_profile']
     cache = st.session_state.get('cm_plan_settings')
-    if cache and cache['profile'] == profile and cache.get('day')==now_jst().date().isoformat():
+    if (not refresh and cache and cache['profile'] == profile
+            and cache.get('day') == now_jst().date().isoformat() and time.time() - cache['at'] < 30):
         return cache['age']
     rows = cm_account_request('GET', '/rest/v1/chokomana_learner_settings', params={
         'profile_id': 'eq.' + profile, 'select': 'age', 'limit': '1'})
@@ -4674,7 +4727,12 @@ def cm_analysis_set_unit(source, menu_id, kind, enabled, expected_version):
 
 def render_analysis_management():
     st.subheader('分析・管理')
-    render_subject_balance()
+    manager_url = cm_mimamori_url()
+    if manager_url:
+        st.link_button('保護者の設定を開く', manager_url)
+        st.caption('教科配分、重点単元、修了認定は「ちょこまな みまもり」で変更できます。')
+    else:
+        render_subject_balance()
     profile = st.session_state['cm_profile']
     app_col, refresh_col = st.columns([3, 1], gap='small', vertical_alignment='bottom')
     with app_col:
@@ -4752,6 +4810,10 @@ def render_analysis_management():
     .st-key-cm_analysis_grid [data-testid="stMarkdownContainer"] p {
       margin:0; padding:5px 0; font-size:13px; overflow-wrap:anywhere;
     }
+    .st-key-cm_analysis_grid [data-testid="stText"],
+    .st-key-cm_analysis_grid [data-testid="stText"] * {
+      color:#233c3c!important; -webkit-text-fill-color:#233c3c!important;
+    }
     .st-key-cm_analysis_grid [data-testid="stText"] {font:inherit; font-size:13px; white-space:normal;}
     .st-key-cm_analysis_grid button {min-height:36px; padding:3px 5px;}
     .st-key-cm_analysis_grid button p {padding:0;}
@@ -4776,6 +4838,10 @@ def render_analysis_management():
                 values = (SUBJECT_NAMES[source], *values)
             for col, value in zip(cols, values):
                 col.text(str(value))
+            if manager_url:
+                cols[-2].text('設定中' if entry['focused'] else '—')
+                cols[-1].text('修了済み' if entry['graduated'] else '—')
+                continue
             unit_key = hashlib.sha256(json.dumps([source, key], ensure_ascii=False).encode()).hexdigest()[:20]
             for col, kind, active, version, labels in (
                 (cols[-2], 'focus', entry['focused'], entry['focus'].get('version'), ('重点にする', '設定中')),
@@ -5202,6 +5268,23 @@ def cm_visible_plan_items(payload):
     return [item for item in payload.get('items', []) if item['source_app'] not in excluded]
 
 
+def cm_plan_display_fallback(profile, day, age, balance, excluded, ready_sources):
+    """Reuse a saved list only when its assignment settings still match."""
+    try:
+        row = cm_saved_daily_plan(profile, day)
+    except RuntimeError:
+        return None
+    if not row:
+        return None
+    payload = row['payload']
+    context = payload.get('selection_context') or {}
+    if (context.get('age') != age or context.get('balance') != balance
+            or set(context.get('excluded_sources', [])) != excluded
+            or set(context.get('ready', [])) != (ready_sources & CM_SOURCE_SUBJECT.keys())):
+        return None
+    return payload
+
+
 def render_daily_plan(apps, return_event=None):
     with st.container(border=True,key='cm_daily_plan'):
         with st.container(key='cm_plan_toolbar'):
@@ -5209,7 +5292,7 @@ def render_daily_plan(apps, return_event=None):
             with title_col:st.markdown('### きょう やること')
             with refresh_col:refresh=cm_button('更新',key='cm_plan_refresh',use_container_width=True)
         try:
-            age = cm_plan_settings()
+            age = cm_plan_settings(refresh=refresh)
         except RuntimeError:
             cm_error('学習設定を読み込めませんでした。')
             return
@@ -5228,7 +5311,8 @@ def render_daily_plan(apps, return_event=None):
             cm_error('教科配分を読み込めませんでした。「更新」で再試行してください。')
             return
         balance, excluded = settings['values'], settings['excluded']
-        cache_key = (st.session_state['cm_profile'], now_jst().date().isoformat(), age,
+        profile, day = st.session_state['cm_profile'], now_jst().date()
+        cache_key = (profile, day.isoformat(), age,
                      tuple(balance.items()), tuple(sorted(ready_sources)), tuple(sorted(excluded)))
         cache_matches = cached is not None and cached['key'] == cache_key
         if refresh or return_event or not cache_matches or time.time()-cached['at']>=30:
@@ -5238,12 +5322,17 @@ def render_daily_plan(apps, return_event=None):
                 cached = {'key':cache_key,'at':time.time(),'payload':payload}
                 st.session_state['cm_plan_snapshot']=cached
             except (RuntimeError,ValueError,KeyError,TypeError) as exc:
-                if return_event:
-                    cm_diag_record('operation','cm_plan_return_refresh',status='error',error=exc,
-                                   trace_id=return_event['id'],stage=return_event['reason'])
+                cm_diag_record('operation','cm_plan_return_refresh' if return_event else 'cm_plan_load',
+                               status='error',error=exc,
+                               trace_id=return_event['id'] if return_event else None,
+                               stage=return_event['reason'] if return_event else None)
                 if not cache_matches:
-                    cm_error('今日のリストを読み込めませんでした。「更新」で再試行してください。')
-                    return
+                    payload = cm_plan_display_fallback(profile, day, age, balance, excluded, ready_sources)
+                    if payload is None:
+                        cm_error('今日のリストを読み込めませんでした。「更新」で再試行してください。')
+                        return
+                    cached = {'key': cache_key, 'payload': payload}
+                    st.session_state['cm_plan_snapshot'] = cached
                 cached['at']=time.time()
                 cached['sync_error']=True
         if cached.get('sync_error'):
@@ -5267,6 +5356,8 @@ def render_daily_plan(apps, return_event=None):
                 cm_error('単元の起動リンクを作れませんでした。もう一度更新してください。')
             st.markdown(cm_plan_items_html(visible_items,links),unsafe_allow_html=True)
             st.caption('ボタンから単元を別タブで開きます。学習記録の同期後、戻ると達成状況を更新します。')
+        elif not p['reached']:
+            st.info('今日の配分と学習状況から選べる課題がありません。')
         if not p['sufficient']:
             st.warning(f'今の進度で選べる単元では、残りの目安に約{cm_minutes(p["remaining_ms"]-p["planned_ms"])}分足りません。'
                        '時間を埋めるために未習得の上級単元を追加しません。')
