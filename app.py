@@ -3682,7 +3682,7 @@ CM_SOROBAN_CHALLENGE_MENUS = frozenset('soroban:calculation:'+mode for mode in (
     'mm1','mm2','mm3','md1','md2','md3','a1','a2','a3'))
 CM_SOROBAN_KUKU_MENUS = frozenset('soroban:kuku:'+str(level) for level in range(1,6))
 CM_SOROBAN_KUKU_PREREQUISITES = ('soroban:calculation:ba1','soroban:calculation:ba2','soroban:calculation:bs1')
-CM_PLANNER_VERSION = 'adaptive-10-subject-balance'
+CM_PLANNER_VERSION = 'adaptive-11-daily-coverage'
 
 
 def cm_daily_menu_allowed(menu, kuku_ready=False):
@@ -4480,8 +4480,9 @@ def cm_reconcile_plan(items, events, stamps, profile, day, generated_at):
         for item in result:
             if assigned and assigned!=item['plan_item_id']:continue
             if (item['source_app'],item['menu_id'])!=(key[0],p.get('menu_id')):continue
+            if not assigned and item.get('credit_from') and item['content_version']!=start.get('content_version'):continue
             if end['payload'].get('answered_count')!=p.get('planned_question_count'):continue
-            cutoff=cm_plan_date(item.get('assigned_at',generated_at))
+            cutoff=cm_plan_date(item.get('credit_from') or item.get('assigned_at',generated_at))
             if when.astimezone(TOKYO).date()!=day or (not assigned and cutoff and when<cutoff):continue
             if len(item['completed_attempts'])>=item['repetitions'] or key in used:continue
             used.add(key);item['completed_attempts'].append(key[1])
@@ -5012,8 +5013,8 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
         'age': age, 'graduation': cm_graduation_fingerprint(graduation_states),
         'excluded_sources': sorted(excluded_sources)}
     if previous and previous['payload'].get('selection_context') == selection_context:
-        progress = cm_daily_progress(previous['payload'], profile, today)
-        if progress['result_fingerprint'] == previous['payload'].get('result_fingerprint') and not refresh:
+        if previous['payload']['items'] or not refresh:
+            progress = cm_daily_progress(previous['payload'], profile, today)
             return cm_refresh_saved_daily_plan(previous, progress, profile, today)
 
     bundle = cm_account_request('POST','/rpc/cm_hub_plan_bundle_v1',{'p_profile':profile})
@@ -5066,6 +5067,10 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
                   if candidate['source_app'] in enabled_sources and candidate['key'][:2] not in graduated]
 
     created = old.get('generated_at') or now
+    day_start = datetime.combine(today, datetime.min.time(), TOKYO).isoformat()
+    old_context = old.get('selection_context', {})
+    migrate = bool(old_context) and old_context != selection_context and {
+        **old_context, 'planner_version': CM_PLANNER_VERSION} == selection_context
     previous_items = [{**item, 'plan_item_id': item.get('plan_item_id') or str(uuid4()),
                        'assigned_at': item.get('assigned_at') or created} for item in old.get('items', [])]
     old_items = cm_reconcile_plan(previous_items, events, stamps, profile, today, created)
@@ -5073,9 +5078,8 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
              if event['event_type'] == 'session_ended'}
     open_starts = [event for event in events if event['event_type'] == 'session_started'
                    and (event['source_app'], event['attempt_id']) not in ended]
-    counts = dict(analysis['today_counts'])
-    committed = dict(spent)
-    reserved = 0
+    counts = {}
+    committed = {}
     items = {}
     reusable = {}
     current = {candidate['key']: candidate for candidate in candidates}
@@ -5083,43 +5087,51 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
         key = (item['source_app'], item['menu_id'], item['content_version'])
         has_started = cm_plan_started(item, open_starts)
         reusable[key] = item
-        if not item['completed_count'] and not has_started:
-            continue
-        # Keep completed and in-progress work even if its new subject allocation is zero.
-        item['repetitions'] = item['completed_count'] + int(has_started)
-        item['available_repetitions'] = int(has_started and key[0] not in excluded_sources)
-        item['done'] = not has_started
+        keep_assignment = migrate and key[0] in enabled_sources and key[:2] not in graduated
+        if not keep_assignment:
+            if not item['completed_count'] and not has_started:
+                continue
+            item['repetitions'] = item['completed_count'] + int(has_started)
         item['focused'] = key[:2] in focus and key[:2] not in graduated
         if key in current:
             item['reason'] = current[key]['reason']
         elif not item['focused'] and item['reason'] == '重点単元の練習':
             item['reason'] = '単元の練習'
         items[key] = item
-        if item['available_repetitions']:
-            counts[key] = counts.get(key, 0) + 1
-            reserved += item['duration_ms']
-            committed[key[0]] = committed.get(key[0], 0) + item['duration_ms']
+        if key[0] in enabled_sources:
+            counts[key] = item['repetitions']
+            committed[key[0]] = committed.get(key[0], 0) + item['duration_ms'] * item['repetitions']
 
-    pending_kuku = any(key[1] in CM_SOROBAN_KUKU_MENUS and item['available_repetitions']
+    pending_kuku = any(key[1] in CM_SOROBAN_KUKU_MENUS and item['completed_count'] < item['repetitions']
                        for key, item in items.items())
-    if not reached:
-        selected = cm_build_daily_plan(candidates, max(0, remaining - reserved), counts, committed, balance,
-            prefer_kuku=kuku_ready and not pending_kuku and cm_kuku_today_count(analysis) == 0)
-        for candidate in selected:
-            key = candidate['key']
-            existing = items.get(key) or reusable.get(key)
-            repetitions = candidate['repetitions']
-            available = items[key]['available_repetitions'] if key in items else 0
-            completed = existing['completed_count'] if existing else 0
-            items[key] = {**candidate, 'plan_item_id': existing['plan_item_id'] if existing else str(uuid4()),
-                'assigned_at': existing['assigned_at'] if existing else now, 'completed_count': completed,
-                'completed_attempts': existing['completed_attempts'] if existing else [],
-                'medals': existing['medals'] if existing else [], 'done': False,
-                'repetitions': completed + available + repetitions, 'available_repetitions': available + repetitions}
+    # Budget the assigned work separately from time logged outside the daily list.
+    selection_ms = max(0, target - sum(committed.values()))
+    selected = cm_build_daily_plan(candidates, selection_ms, counts, committed, balance,
+        prefer_kuku=kuku_ready and not pending_kuku and cm_kuku_today_count(analysis) == 0)
+    covered_subjects = {CM_SOURCE_SUBJECT[source] for source in committed}
+    covered_subjects.update(CM_SOURCE_SUBJECT[candidate['source_app']] for candidate in selected)
+    # Keep a task for every eligible subject even if the planned duration passes the guide.
+    for candidate in sorted(candidates, key=lambda c: (not c.get('focused'), -c['score'], c['duration_ms'], c['key'])):
+        subject = CM_SOURCE_SUBJECT[candidate['source_app']]
+        if subject not in covered_subjects:
+            selected.append({**candidate, 'repetitions': 1})
+            covered_subjects.add(subject)
+    for candidate in selected:
+        key = candidate['key']
+        existing = items.get(key) or reusable.get(key)
+        repetitions = counts.get(key, 0) + candidate['repetitions']
+        items[key] = {**candidate, 'plan_item_id': existing['plan_item_id'] if existing else str(uuid4()),
+            'assigned_at': existing['assigned_at'] if existing else now,
+            'credit_from': (existing.get('credit_from') or existing['assigned_at']) if existing else day_start,
+            'repetitions': repetitions}
 
-    for key, item in items.items():
-        item['today_completed_count'] = analysis['today_counts'].get(key, 0)
-    planned = sum(item['duration_ms'] * item['available_repetitions'] for item in items.values())
+    reconciled = cm_reconcile_plan(list(items.values()), events, stamps, profile, today, created)
+    for item in reconciled:
+        key = (item['source_app'], item['menu_id'], item['content_version'])
+        item['available_repetitions'] = (0 if key[0] in excluded_sources
+                                        else item['repetitions'] - item['completed_count'])
+        item['today_completed_count'] = analysis['today_counts'].get(key, item['completed_count'])
+    planned = sum(item['duration_ms'] * item['available_repetitions'] for item in reconciled)
     progress_fields = ('source_app','menu_id','content_version','estimated_duration_ms',
                        'category_id','difficulty_id','label','assessment_method')
     payload = {
@@ -5129,7 +5141,7 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
         'spent_ms': analysis['spent_ms'], 'measured_ms': analysis['measured_ms'],
         'estimated_ms': analysis['estimated_ms'], 'missing_time': analysis['missing_time'],
         'partial_time': analysis['partial_time'], 'remaining_ms': remaining, 'planned_ms': planned,
-        'items': list(items.values()), 'sources': sorted({m['source_app'] for m in menus if m['source_app'] in ready}),
+        'items': reconciled, 'sources': sorted({m['source_app'] for m in menus if m['source_app'] in ready}),
         'eligible_subjects': sorted({CM_SOURCE_SUBJECT[c['source_app']] for c in candidates}),
         'reached': reached, 'sufficient': reached or planned >= remaining * .95,
         'generated_at': created, 'refreshed_at': now, 'focus_fingerprint': cm_focus_fingerprint(focus),
@@ -5339,15 +5351,18 @@ def render_daily_plan(apps, return_event=None):
             st.caption('同期できないため、前回の達成状況を表示しています。「更新」で再試行できます。')
         p = cached['payload']
         age=p['age']
-        summary=f'<p class="cm-plan-summary">{age}歳 · 目安{age*10}分 <span>学習済み {cm_minutes(p["spent_ms"])}分</span></p>'
-        if not p['reached']:
-            summary+=f'<p class="cm-plan-subsummary">このあと約{cm_minutes(p["planned_ms"])}分 · 残りの目安{cm_minutes(p["remaining_ms"])}分</p>'
-        st.markdown(summary,unsafe_allow_html=True)
-        if p['missing_time'] or p['partial_time']:
-            st.caption('未計測の時間があります。完了した学習は単元の目安時間で補っており、残り時間は暫定です。')
-        if p['reached']:
-            st.success('きょうの目安にとどいたよ！')
         visible_items = cm_visible_plan_items(p)
+        completed = sum(bool(item['done']) for item in visible_items)
+        pending_count = len(visible_items) - completed
+        summary=f'<p class="cm-plan-summary">{age}歳 · 目安{age*10}分 <span>学習済み {cm_minutes(p["spent_ms"])}分</span></p>'
+        if visible_items:
+            progress = f'達成 {completed}／{len(visible_items)}件'
+            if pending_count:
+                progress += f' · 残り{pending_count}件（約{cm_minutes(p["planned_ms"])}分）'
+            summary += f'<p class="cm-plan-subsummary">{progress}</p>'
+        st.markdown(summary,unsafe_allow_html=True)
+        if visible_items and not pending_count:
+            st.success('きょうの課題を ぜんぶクリア！')
         if visible_items:
             try:
                 links=cm_plan_launch_links(visible_items,apps)
@@ -5356,22 +5371,20 @@ def render_daily_plan(apps, return_event=None):
                 cm_error('単元の起動リンクを作れませんでした。もう一度更新してください。')
             st.markdown(cm_plan_items_html(visible_items,links),unsafe_allow_html=True)
             st.caption('ボタンから単元を別タブで開きます。学習記録の同期後、戻ると達成状況を更新します。')
-        elif not p['reached']:
+        else:
             st.info('今日の配分と学習状況から選べる課題がありません。')
-        if not p['sufficient']:
-            st.warning(f'今の進度で選べる単元では、残りの目安に約{cm_minutes(p["remaining_ms"]-p["planned_ms"])}分足りません。'
-                       '時間を埋めるために未習得の上級単元を追加しません。')
-        if not p['reached']:
-            pending = [label for subject, (label, _) in CM_SCHOOL_SUBJECTS.items()
+        if p['missing_time'] or p['partial_time']:
+            st.caption('未計測の時間は、完了した単元の目安時間で補っています。')
+        unavailable = [label for subject, (label, _) in CM_SCHOOL_SUBJECTS.items()
                        if balance[subject] and subject not in p['eligible_subjects']]
-            if pending:
-                st.caption('いま選べる単元がない教科　' + '・'.join(pending))
+        if unavailable:
+            st.caption('いま選べる単元がない教科　' + '・'.join(unavailable))
         with st.expander('選び方・時間の目安について'):
             settings_place = '「ちょこまな みまもり」' if cm_mimamori_url() else '「分析・管理」'
-            st.write(settings_place + 'で設定した配分に、今日すでに学んだ時間も含めて近づけます。'
-                     '単元を選べない教科の時間は、配分がある他の教科で補います。')
+            st.write(settings_place + 'で設定した教科配分をもとに課題を選びます。'
+                     '時間は目安です。今日の課題を一つずつ終えると達成になります。')
             st.write('教科の中では、初回の正答やメダルの傾向から、習得した分野は次の単元へ進み、'
-                     'つまずいた分野は同じ単元の練習と復習を優先します。完了した学習が同期されると残りの課題を見直します。')
+                     'つまずいた分野は同じ単元の練習と復習を優先します。学習が同期されると、該当する課題の達成状況を更新します。')
             st.write('復習間隔は正答が続くと1→3→7→14→30日へ延ばし、つまずくと翌日に戻します。効果を保証する日数ではなく、成績に応じて調整する初期設定です。')
             st.write('1日の目安は年齢×10分です。休憩は学習時間に含めません。'
                      '同じ単元は1日3回を目安にします。配分を変更しても、完了済み・進行中の課題は残ります。')
