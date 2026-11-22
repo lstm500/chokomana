@@ -6,8 +6,8 @@ writes its own completed challenges to public.chokomana_stamps. The hub stores
 daily speech awards in public.chokomana_speech_medals (see speech_medals.sql).
 
 Deploy: rename this file to app.py in the hub's own GitHub repository.
-Apply subject_balance.sql once to the hub's Supabase database to enable saving
-school-subject percentages.
+Apply the current subject_balance.sql to the hub's Supabase database to enable
+school-subject percentages and study source preferences.
 Streamlit Cloud already provides streamlit; this file uses only Python stdlib
 for Supabase REST requests (no supabase-py dependency).
 
@@ -1087,11 +1087,11 @@ def cm_notice_plain(value):
 def cm_notice_plan_items():
     profile=st.session_state.get('cm_profile');day=now_jst().date().isoformat()
     cached=st.session_state.get('cm_plan_snapshot') or {};key=cached.get('key') or ()
-    if len(key)>1 and key[0]==profile and key[1]==day:return cached.get('payload',{}).get('items',[])
+    if len(key)>1 and key[0]==profile and key[1]==day:return cm_visible_plan_items(cached['payload'])
     cached=st.session_state.get('cm_receipt_plan')
     if cached and cached['profile']==profile and cached['day']==day and time.time()-cached['at']<10:return cached['items']
     rows=cm_account_request('GET','/rest/v1/chokomana_daily_plans',params={'profile_id':'eq.'+str(profile),'study_date':'eq.'+day,'select':'payload','limit':'1'}) or []
-    items=(rows[0].get('payload') or {}).get('items',[]) if rows else []
+    items=cm_visible_plan_items(rows[0].get('payload') or {}) if rows else []
     st.session_state['cm_receipt_plan']={'profile':profile,'day':day,'at':time.time(),'items':items};return items
 
 def cm_notice_metadata(rows):
@@ -3634,28 +3634,37 @@ def cm_validate_subject_balance(values):
     return balance
 
 
+def cm_cache_plan_balance(rows, profile, *, available=True, can_exclude=True):
+    if not isinstance(rows, list) or (rows and rows[0].get('profile_id') != profile):
+        raise RuntimeError('invalid subject balance response')
+    values = cm_validate_subject_balance(rows[0]) if rows else dict(CM_DEFAULT_BALANCE)
+    excluded = rows[0].get('excluded_sources', []) if rows else []
+    if not isinstance(excluded, list) or any(not isinstance(source, str) for source in excluded):
+        raise RuntimeError('invalid excluded study sources')
+    settings = {'profile': profile, 'values': values, 'available': available,
+                'excluded': frozenset(excluded) & CM_SOURCE_SUBJECT.keys(),
+                'can_exclude': can_exclude, 'at': time.monotonic()}
+    st.session_state['cm_plan_balance'] = settings
+    return settings
+
+
 def cm_plan_balance(*, refresh=False):
     profile = st.session_state['cm_profile']
     cached = st.session_state.get('cm_plan_balance')
     if not refresh and cached and cached['profile'] == profile and time.monotonic() - cached['at'] < 30:
-        return cached['values'], cached['available']
+        return cached
+    params = {'profile_id': 'eq.' + profile, 'select': 'profile_id,' + ','.join(CM_SCHOOL_SUBJECTS), 'limit': '1'}
     try:
         rows = cm_account_request('GET', CM_SUBJECT_BALANCE_TABLE,
-            params={'profile_id': 'eq.' + profile,
-                    'select': 'profile_id,' + ','.join(CM_SCHOOL_SUBJECTS), 'limit': '1'})
+            params={**params, 'select': params['select'] + ',excluded_sources'})
     except RuntimeError as exc:
-        if 'HTTP 404' not in str(exc):
-            raise
-        # Existing deployments continue with the default while the new table is installed.
-        values, available = dict(CM_DEFAULT_BALANCE), False
-    else:
-        if not isinstance(rows, list) or (rows and rows[0].get('profile_id') != profile):
-            raise RuntimeError('invalid subject balance response')
-        values = cm_validate_subject_balance(rows[0]) if rows else dict(CM_DEFAULT_BALANCE)
-        available = True
-    st.session_state['cm_plan_balance'] = {
-        'profile': profile, 'values': values, 'available': available, 'at': time.monotonic()}
-    return values, available
+        if 'HTTP 400' in str(exc):
+            rows = cm_account_request('GET', CM_SUBJECT_BALANCE_TABLE, params=params)
+            return cm_cache_plan_balance(rows, profile, can_exclude=False)
+        if 'HTTP 404' in str(exc):
+            return cm_cache_plan_balance([], profile, available=False, can_exclude=False)
+        raise
+    return cm_cache_plan_balance(rows, profile)
 
 
 def cm_save_subject_balance(values):
@@ -3666,9 +3675,28 @@ def cm_save_subject_balance(values):
     if not isinstance(rows, list) or len(rows) != 1 or rows[0].get('profile_id') != profile or any(
             rows[0].get(subject) != value for subject, value in values.items()):
         raise RuntimeError('subject balance save could not be confirmed')
-    st.session_state['cm_plan_balance'] = {
-        'profile': profile, 'values': values, 'available': True, 'at': time.monotonic()}
+    cm_cache_plan_balance(rows, profile, can_exclude='excluded_sources' in rows[0])
     st.session_state.pop('cm_plan_snapshot', None)
+
+
+def cm_change_plan_source(source, exclude):
+    profile = st.session_state['cm_profile']
+    try:
+        rows = cm_account_request('POST', '/rpc/cm_set_plan_source_excluded', {
+            'p_profile': profile, 'p_source': source, 'p_excluded': exclude})
+        if (not isinstance(rows, list) or len(rows) != 1 or rows[0].get('profile_id') != profile
+                or not isinstance(rows[0].get('excluded_sources'), list)
+                or (source in rows[0]['excluded_sources']) != exclude):
+            raise RuntimeError('source preference save could not be confirmed')
+        cm_cache_plan_balance(rows, profile)
+    except (RuntimeError, ValueError) as exc:
+        cm_diag_record('operation', 'cm_change_plan_source', status='error', error=exc)
+        st.session_state['cm_plan_source_error'] = '分類の設定を保存できませんでした。もう一度お試しください。'
+        return
+    st.session_state.pop('cm_plan_snapshot', None)
+    st.session_state.pop('cm_receipt_plan', None)
+    st.session_state['cm_plan_source_message'] = (
+        '自動出題から外しました。' if exclude else '自動出題の停止を解除しました。')
 
 
 @st.fragment
@@ -3676,22 +3704,26 @@ def render_subject_balance():
     with st.container(border=True, key='cm_subject_balance'):
         st.markdown('**「きょう やること」の教科配分**')
         try:
-            values, available = cm_plan_balance()
+            settings = cm_plan_balance()
         except (RuntimeError, ValueError) as exc:
             cm_diag_record('operation', 'cm_plan_balance', status='error', error=exc)
             cm_error('教科配分を読み込めませんでした。ページを開き直してお試しください。')
             return
-        st.caption('学習時間の目安を％で指定します。')
+        values, available = settings['values'], settings['available']
+        st.caption('学習時間の目安を％で指定し、分類ごとに自動出題を切り替えます。')
         if not available:
             st.info('配分を保存するには、管理者によるデータベースの初期設定が必要です。')
+        elif not settings['can_exclude']:
+            st.info('分類を切り替えるには、管理者によるデータベースの更新が必要です。')
         st.markdown(
             '<style>.cm-balance-total{margin:.25rem 0 .5rem;font-weight:650}'
             '.cm-balance-total strong{font-size:1.25em}.cm-balance-total span{margin-inline-start:.6em}'
             '.cm-balance-total-ok span{color:#237264}.cm-balance-total-warn span{color:#aa4422}'
             '@media(max-width:640px){.st-key-cm_subject_balance [data-testid=stHorizontalBlock]'
             '{flex-wrap:wrap}.st-key-cm_subject_balance [data-testid=stHorizontalBlock] > [data-testid=stColumn]'
-            '{flex:1 1 26%;min-width:0;width:auto}}</style>', unsafe_allow_html=True)
+            '{flex:1 1 43%;min-width:0;width:auto}}</style>', unsafe_allow_html=True)
         with st.container(border=True):
+            titles = {app['id']: app['title'] for app in APP_DEFINITIONS}
             columns = st.columns(len(CM_SCHOOL_SUBJECTS), gap='small')
             chosen = {}
             for column, (subject, (label, sources)) in zip(columns, CM_SCHOOL_SUBJECTS.items()):
@@ -3699,6 +3731,18 @@ def render_subject_balance():
                     value=values[subject], step=1, key='cm_plan_balance_' + subject, disabled=not available)
                 if not sources:
                     column.caption('未連携')
+                for source in sources:
+                    excluded = source in settings['excluded']
+                    with column.container(border=True):
+                        st.markdown(f'**{titles[source]}**')
+                        if excluded:
+                            st.caption('自動出題を停止中')
+                        cm_button('再開する' if excluded else '学習しない',
+                                  key='cm_plan_source_' + source,
+                                  type='primary' if excluded else 'secondary',
+                                  help=titles[source] + 'の自動出題を切り替える',
+                                  disabled=not settings['can_exclude'], use_container_width=True,
+                                  on_click=cm_change_plan_source, args=(source, not excluded))
             total = sum(chosen.values())
             gap = 100 - total
             status = '配分OK' if gap == 0 else (f'あと{gap}％' if gap > 0 else f'{-gap}％超過')
@@ -3717,6 +3761,10 @@ def render_subject_balance():
                 cm_error('教科配分の保存を確認できませんでした。もう一度お試しください。')
             else:
                 st.success('教科配分を保存しました。今日の残りの課題に反映します。')
+        if error := st.session_state.pop('cm_plan_source_error', None):
+            cm_error(error)
+        if message := st.session_state.pop('cm_plan_source_message', None):
+            st.success(message)
         st.caption('0％の教科と、出題できる単元がない教科は自動出題の対象外です。'
                    '単元がない教科の時間は、配分がある他の教科で調整します。')
 
@@ -4763,8 +4811,10 @@ def cm_daily_progress(payload, profile, today):
         {**i,'estimated_duration_ms':i['duration_ms']} for i in payload.get('items',[])]
     analysis=cm_medal_progress(cm_plan_analyze(events,menus,profile,today),medals,menus,events,profile,today)
     items=cm_reconcile_plan(payload.get('items',[]),events,medals,profile,today,payload['generated_at'])
+    excluded = set(payload.get('selection_context', {}).get('excluded_sources', []))
     for item in items:
-        item['available_repetitions']=max(0,item['repetitions']-item['completed_count'])
+        item['available_repetitions'] = (0 if item['source_app'] in excluded
+                                        else max(0, item['repetitions'] - item['completed_count']))
         item['today_completed_count']=analysis['today_counts'].get(
             (item['source_app'],item['menu_id'],item['content_version']),item['completed_count'])
     remaining=max(0,payload['target_ms']-analysis['spent_ms'])
@@ -4816,7 +4866,7 @@ def cm_refresh_saved_daily_plan(row, payload, profile, today):
     return latest['payload']
 
 
-def cm_load_daily_plan(age, balance, allowed_sources, *, refresh=False):
+def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozenset(), refresh=False):
     from uuid import uuid4
 
     profile = st.session_state['cm_profile']
@@ -4829,7 +4879,8 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, refresh=False):
     focus = cm_focused_menus(graduation_states)
     selection_context = {
         'planner_version': CM_PLANNER_VERSION, 'balance': balance, 'ready': sorted(ready),
-        'age': age, 'graduation': cm_graduation_fingerprint(graduation_states)}
+        'age': age, 'graduation': cm_graduation_fingerprint(graduation_states),
+        'excluded_sources': sorted(excluded_sources)}
     if previous and previous['payload'].get('selection_context') == selection_context:
         progress = cm_daily_progress(previous['payload'], profile, today)
         if progress['result_fingerprint'] == previous['payload'].get('result_fingerprint') and not refresh:
@@ -4880,7 +4931,7 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, refresh=False):
             key = (menu['source_app'], menu['menu_id'], menu['content_version'])
             analysis['stats'].setdefault(key, {})['graduated'] = True
     kuku_ready = cm_soroban_kuku_ready(menus, analysis)
-    enabled_sources = {source for source in ready if balance[CM_SOURCE_SUBJECT[source]] > 0}
+    enabled_sources = {source for source in ready - excluded_sources if balance[CM_SOURCE_SUBJECT[source]] > 0}
     candidates = [candidate for candidate in cm_plan_candidates(menus, analysis, today, focus - graduated)
                   if candidate['source_app'] in enabled_sources and candidate['key'][:2] not in graduated]
 
@@ -4906,7 +4957,7 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, refresh=False):
             continue
         # Keep completed and in-progress work even if its new subject allocation is zero.
         item['repetitions'] = item['completed_count'] + int(has_started)
-        item['available_repetitions'] = int(has_started)
+        item['available_repetitions'] = int(has_started and key[0] not in excluded_sources)
         item['done'] = not has_started
         item['focused'] = key[:2] in focus and key[:2] not in graduated
         if key in current:
@@ -4914,7 +4965,7 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, refresh=False):
         elif not item['focused'] and item['reason'] == '重点単元の練習':
             item['reason'] = '単元の練習'
         items[key] = item
-        if has_started:
+        if item['available_repetitions']:
             counts[key] = counts.get(key, 0) + 1
             reserved += item['duration_ms']
             committed[key[0]] = committed.get(key[0], 0) + item['duration_ms']
@@ -5082,6 +5133,11 @@ def cm_plan_return_event():
     return {'id': ident, 'reason': event['reason']}
 
 
+def cm_visible_plan_items(payload):
+    excluded = set(payload.get('selection_context', {}).get('excluded_sources', []))
+    return [item for item in payload.get('items', []) if item['source_app'] not in excluded]
+
+
 def render_daily_plan(apps, return_event=None):
     with st.container(border=True,key='cm_daily_plan'):
         with st.container(key='cm_plan_toolbar'):
@@ -5100,17 +5156,18 @@ def render_daily_plan(apps, return_event=None):
         cached = st.session_state.get('cm_plan_snapshot')
         ready_sources={a['id'] for a in apps if a['ready']}
         try:
-            balance, _ = cm_plan_balance(refresh=refresh)
+            settings = cm_plan_balance(refresh=refresh)
         except (RuntimeError, ValueError):
             cm_error('教科配分を読み込めませんでした。「更新」で再試行してください。')
             return
+        balance, excluded = settings['values'], settings['excluded']
         cache_key = (st.session_state['cm_profile'], now_jst().date().isoformat(), age,
-                     tuple(balance.items()), tuple(sorted(ready_sources)))
+                     tuple(balance.items()), tuple(sorted(ready_sources)), tuple(sorted(excluded)))
         cache_matches = cached is not None and cached['key'] == cache_key
         if refresh or return_event or not cache_matches or time.time()-cached['at']>=30:
             try:
                 with nullcontext() if cache_matches else st.spinner('今日のリストを読み込んでいます…'):
-                    payload = cm_load_daily_plan(age, balance, ready_sources, refresh=refresh)
+                    payload = cm_load_daily_plan(age, balance, ready_sources, excluded_sources=excluded, refresh=refresh)
                 cached = {'key':cache_key,'at':time.time(),'payload':payload}
                 st.session_state['cm_plan_snapshot']=cached
             except (RuntimeError,ValueError,KeyError,TypeError) as exc:
@@ -5134,13 +5191,14 @@ def render_daily_plan(apps, return_event=None):
             st.caption('未計測の時間があります。完了した学習は単元の目安時間で補っており、残り時間は暫定です。')
         if p['reached']:
             st.success('きょうの目安にとどいたよ！')
-        if p['items']:
+        visible_items = cm_visible_plan_items(p)
+        if visible_items:
             try:
-                links=cm_plan_launch_links(p['items'],apps)
+                links=cm_plan_launch_links(visible_items,apps)
             except (RuntimeError,ValueError):
                 links={}
                 cm_error('単元の起動リンクを作れませんでした。もう一度更新してください。')
-            st.markdown(cm_plan_items_html(p['items'],links),unsafe_allow_html=True)
+            st.markdown(cm_plan_items_html(visible_items,links),unsafe_allow_html=True)
             st.caption('ボタンから単元を別タブで開きます。学習記録の同期後、戻ると達成状況を更新します。')
         if not p['sufficient']:
             st.warning(f'今の進度で選べる単元では、残りの目安に約{cm_minutes(p["remaining_ms"]-p["planned_ms"])}分足りません。'
@@ -5158,6 +5216,7 @@ def render_daily_plan(apps, return_event=None):
             st.write('復習間隔は正答が続くと1→3→7→14→30日へ延ばし、つまずくと翌日に戻します。効果を保証する日数ではなく、成績に応じて調整する初期設定です。')
             st.write('1日の目安は年齢×10分です。休憩は学習時間に含めません。'
                      '同じ単元は1日3回を目安にします。配分を変更しても、完了済み・進行中の課題は残ります。')
+            st.write('「学習しない」にした分類はここに表示されません。学んだ記録は残ります。')
             st.write('所要時間は保証値ではありません。同じ条件の完了記録が3回以上そろうと直近10回までの実測中央値を使い、それまでは仮の目安を表示します。')
             st.caption('学習ログから判定する適応型モデルです。生成AIへのデータ送信やAPIの追加料金はありません。画面外での助力や内面の理解は断定しません。')
 
