@@ -3671,6 +3671,7 @@ def cm_save_subject_balance(values):
     st.session_state.pop('cm_plan_snapshot', None)
 
 
+@st.fragment
 def render_subject_balance():
     with st.container(border=True, key='cm_subject_balance'):
         st.markdown('**「きょう やること」の教科配分**')
@@ -3680,20 +3681,32 @@ def render_subject_balance():
             cm_diag_record('operation', 'cm_plan_balance', status='error', error=exc)
             cm_error('教科配分を読み込めませんでした。ページを開き直してお試しください。')
             return
-        st.caption('学習時間の目安を％で指定します。合計は100％、0％の教科は新しく出題しません。')
+        st.caption('学習時間の目安を％で指定します。')
         if not available:
             st.info('配分を保存するには、管理者によるデータベースの初期設定が必要です。')
         st.markdown(
-            '<style>@media(max-width:640px){.st-key-cm_subject_balance [data-testid=stHorizontalBlock]'
+            '<style>.cm-balance-total{margin:.25rem 0 .5rem;font-weight:650}'
+            '.cm-balance-total strong{font-size:1.25em}.cm-balance-total span{margin-inline-start:.6em}'
+            '.cm-balance-total-ok span{color:#237264}.cm-balance-total-warn span{color:#aa4422}'
+            '@media(max-width:640px){.st-key-cm_subject_balance [data-testid=stHorizontalBlock]'
             '{flex-wrap:wrap}.st-key-cm_subject_balance [data-testid=stHorizontalBlock] > [data-testid=stColumn]'
             '{flex:1 1 26%;min-width:0;width:auto}}</style>', unsafe_allow_html=True)
-        with st.form('cm_subject_balance_form'):
+        with st.container(border=True):
             columns = st.columns(len(CM_SCHOOL_SUBJECTS), gap='small')
             chosen = {}
-            for column, (subject, (label, _)) in zip(columns, CM_SCHOOL_SUBJECTS.items()):
+            for column, (subject, (label, sources)) in zip(columns, CM_SCHOOL_SUBJECTS.items()):
                 chosen[subject] = column.number_input(f'{label}（％）', min_value=0, max_value=100,
                     value=values[subject], step=1, key='cm_plan_balance_' + subject, disabled=not available)
-            saved = cm_form_submit_button('教科配分を保存', disabled=not available)
+                if not sources:
+                    column.caption('未連携')
+            total = sum(chosen.values())
+            gap = 100 - total
+            status = '配分OK' if gap == 0 else (f'あと{gap}％' if gap > 0 else f'{-gap}％超過')
+            tone = 'ok' if gap == 0 else 'warn'
+            st.markdown(f'<p class="cm-balance-total cm-balance-total-{tone}" role="status">'
+                        f'合計 <strong>{total}％</strong> / 100％<span>{status}</span></p>',
+                        unsafe_allow_html=True)
+            saved = cm_button('教科配分を保存', key='cm_plan_balance_save', disabled=not available or gap != 0)
         if saved:
             try:
                 cm_save_subject_balance(chosen)
@@ -3704,8 +3717,8 @@ def render_subject_balance():
                 cm_error('教科配分の保存を確認できませんでした。もう一度お試しください。')
             else:
                 st.success('教科配分を保存しました。今日の残りの課題に反映します。')
-        st.caption('算数はそろばんと図形、社会は地理を含みます。理科は現在未連携です。'
-                   '単元を選べない教科の時間は、配分がある他の教科で調整します。')
+        st.caption('0％の教科と、出題できる単元がない教科は自動出題の対象外です。'
+                   '単元がない教科の時間は、配分がある他の教科で調整します。')
 
 
 def cm_step_plan_age(delta):
@@ -4867,8 +4880,9 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, refresh=False):
             key = (menu['source_app'], menu['menu_id'], menu['content_version'])
             analysis['stats'].setdefault(key, {})['graduated'] = True
     kuku_ready = cm_soroban_kuku_ready(menus, analysis)
+    enabled_sources = {source for source in ready if balance[CM_SOURCE_SUBJECT[source]] > 0}
     candidates = [candidate for candidate in cm_plan_candidates(menus, analysis, today, focus - graduated)
-                  if candidate['source_app'] in ready and candidate['key'][:2] not in graduated]
+                  if candidate['source_app'] in enabled_sources and candidate['key'][:2] not in graduated]
 
     created = old.get('generated_at') or now
     previous_items = [{**item, 'plan_item_id': item.get('plan_item_id') or str(uuid4()),
