@@ -2061,10 +2061,14 @@ CM_TRAIN_STYLE = """<style>
   outline:3px solid #2383c8;outline-offset:3px
 }
 .cm-train-prize-headline{font-size:clamp(1.05rem,4.6vw,1.35rem);font-weight:850}
+.cm-train-prize-visual{position:relative;width:min(12rem,50vw,36vh);margin:0 auto}
 .cm-train-prize-image{
-  display:block;width:min(12rem,50vw,36vh);height:auto;aspect-ratio:1;object-fit:contain;
-  margin:0 auto
+  display:block;width:100%;height:auto;aspect-ratio:1;object-fit:contain
 }
+.cm-train-new-badge{display:inline-block;padding:.16em .55em;border-radius:999px;
+  background:#b62318;color:#fff;font-size:.74rem;font-weight:850;line-height:1.2;letter-spacing:.04em}
+.cm-train-prize-visual .cm-train-new-badge{position:absolute;top:.22rem;left:50%;transform:translateX(-50%);
+  font-size:clamp(1.15rem,5vw,1.55rem);border:2px solid #fff;box-shadow:0 2px 7px #53261f45}
 .cm-train-prize-name{font-size:clamp(1rem,4.1vw,1.28rem);font-weight:800}
 .cm-train-prize-series{font-size:.95rem;margin-top:1px}
 .cm-train-collection{
@@ -2075,7 +2079,7 @@ CM_TRAIN_STYLE = """<style>
   text-align:center;line-height:1.3;min-width:0;font:inherit;cursor:pointer}
 .cm-train-card-art{display:block;width:min(90%,122px);aspect-ratio:1;object-fit:contain}
 .cm-train-card strong{font-size:.9rem}
-.cm-train-card-summary{color:#284e69;font-size:.82rem}
+.cm-train-card-summary{display:flex;align-items:center;justify-content:center;gap:.35rem;color:#284e69;font-size:.82rem}
 .cm-train-card-more{font-size:.76rem;color:#275d85;text-decoration:underline}
 .cm-train-detail{width:min(32rem,calc(100% - 1.5rem));max-height:calc(100dvh - 2rem);
   box-sizing:border-box;margin:auto;padding:clamp(14px,4vw,26px);border:2px solid #aac5d5;
@@ -2127,15 +2131,17 @@ def cm_train_reel_cell(train=None, *, matched=False, decorative=False):
     return f'<div class="cm-train-cell{state}">{face}</div>'
 
 
-def cm_train_prize_popup(train):
+def cm_train_prize_popup(train, *, is_new=False):
     line, series, artwork = CM_TRAIN_SYMBOLS[train]
     destination, feature = CM_TRAIN_DETAILS[train]
+    badge = '<span class="cm-train-new-badge" aria-label="はじめてゲット">NEW</span>' if is_new else ''
     return (
         '<details class="cm-train-prize" open="open">'
         '<summary class="cm-train-prize-summary">とじる</summary>'
         '<div role="status" aria-live="polite">'
         '<div class="cm-train-prize-headline">このメダルが あたったよ！</div>'
-        f'<img class="cm-train-prize-image" src="data:image/webp;base64,{artwork}" alt="" />'
+        f'<div class="cm-train-prize-visual">{badge}'
+        f'<img class="cm-train-prize-image" src="data:image/webp;base64,{artwork}" alt="" /></div>'
         f'<div class="cm-train-prize-name">{html.escape(line)}</div>'
         f'<div class="cm-train-prize-series">{html.escape(series)}</div>'
         f'<div class="cm-train-feature">{html.escape(feature)}<br />{html.escape(destination)}</div>'
@@ -2143,7 +2149,7 @@ def cm_train_prize_popup(train):
     )
 
 
-def cm_train_board(result, animate=False, *, spinning=False):
+def cm_train_board(result, animate=False, *, spinning=False, is_new=False):
     board = (result or {}).get("board") or []
     complete = len(board) == 9
     animate = animate and complete
@@ -2179,7 +2185,7 @@ def cm_train_board(result, animate=False, *, spinning=False):
         for line, key in CM_TRAIN_REPRESENTATIVES.items()
     ) if complete or spinning else ""
     motion = " cm-train-reveal" if animate else " cm-train-spinning" if spinning else ""
-    popup = cm_train_prize_popup(prize) if animate and prize in CM_TRAIN_SYMBOLS else ""
+    popup = cm_train_prize_popup(prize, is_new=is_new) if animate and prize in CM_TRAIN_SYMBOLS else ""
     return (f'<section class="cm-train-machine{motion}" aria-label="電車ルーレット" '
             f'style="--finish:{CM_TRAIN_REEL_STOPS[-1]}ms;{artwork}">'
             f'<div class="cm-train-grid">{"".join(windows)}</div>'
@@ -2203,6 +2209,11 @@ CM_TRAIN_COLLECTION_POPUP = """<dialog class="cm-train-detail" id="cm-train-deta
 (() => {
   const root = document.currentScript.parentElement;
   const popup = root.querySelector("dialog");
+  for (const badge of root.querySelectorAll("[data-new-until]")) {
+    const ms = Date.parse(badge.dataset.newUntil) - Date.now();
+    if (ms > 0) window.setTimeout(() => badge.remove(), ms);
+    else badge.remove();
+  }
   root.querySelector(".cm-train-collection").addEventListener("click", event => {
     const card = event.target.closest(".cm-train-card");
     if (!card || popup.open) return;
@@ -2218,7 +2229,20 @@ CM_TRAIN_COLLECTION_POPUP = """<dialog class="cm-train-detail" id="cm-train-deta
 </script>"""
 
 
-def cm_train_collection(collection, pending_prize=None):
+def cm_train_recent_new(overview, *, now=None):
+    now = now or datetime.now(timezone.utc)
+    recent = {}
+    for train, acquisition in (overview.get("new_trains") or {}).items():
+        if train not in CM_TRAIN_SYMBOLS or not isinstance(acquisition, dict):
+            continue
+        expires = cm_plan_date(acquisition.get("new_until"))
+        if expires and expires > now:
+            recent[train] = (acquisition.get("request_id"), expires.isoformat())
+    return recent
+
+
+def cm_train_collection(collection, pending_prize=None, *, recent_new=None):
+    recent_new = recent_new or {}
     cards = []
     already_owned = False
     for train, (line, series, artwork) in CM_TRAIN_SYMBOLS.items():
@@ -2234,6 +2258,10 @@ def cm_train_collection(collection, pending_prize=None):
                      f'<span class="cm-train-count-after">{owned}まい</span>')
         destination, feature = CM_TRAIN_DETAILS[train]
         image = f'data:image/webp;base64,{artwork}'
+        badge = ""
+        if train in recent_new:
+            expires = html.escape(recent_new[train][1], quote=True)
+            badge = f'<span class="cm-train-new-badge" data-new-until="{expires}">NEW</span>'
         cards.append(
             f'<button type="button" class="cm-train-card{state}" aria-haspopup="dialog" '
             f'aria-controls="cm-train-detail" data-line="{html.escape(line, quote=True)}" '
@@ -2241,7 +2269,7 @@ def cm_train_collection(collection, pending_prize=None):
             f'data-feature="{html.escape(feature, quote=True)}">'
             f'<img class="cm-train-card-art" src="{image}" loading="lazy" alt="" />'
             f'<strong>{html.escape(line)}<br />{html.escape(series)}</strong>'
-            f'<span class="cm-train-card-summary">{count}</span>'
+            f'<span class="cm-train-card-summary">{count}{badge}</span>'
             '<span class="cm-train-card-more">くわしく見る</span></button>')
     empty_message = "あたりが出ると、ここに電車メダルがならびます。"
     if cards:
@@ -2306,7 +2334,20 @@ def render_train_roulette(profile):
         return
 
     new_result = spin if spin and spin["status"] == "ok" else None
-    board_slot.html(cm_train_board(new_result or overview.get("latest"), bool(new_result)))
+    collection = overview.get("collection", {})
+    recent_new = cm_train_recent_new(overview)
+    pending_prize = (new_result or {}).get("prize_train")
+    if len((new_result or {}).get("board") or ()) != 9 or pending_prize not in CM_TRAIN_SYMBOLS:
+        pending_prize = None
+    is_new = False
+    if pending_prize:
+        if "new_trains" in overview:
+            first_win = recent_new.get(pending_prize)
+            is_new = bool(first_win and first_win[0] == new_result.get("request_id"))
+        else:
+            # Older database versions still identify an unambiguous first win at reveal.
+            is_new = collection.get(pending_prize) == 1
+    board_slot.html(cm_train_board(new_result or overview.get("latest"), bool(new_result), is_new=is_new))
     if notice:
         st.info(notice)
     balances = overview.get("balances", {})
@@ -2327,10 +2368,7 @@ def render_train_roulette(profile):
                               args=(profile, grade))
                     st.caption(f"1枚で{rounds}回 · {lines}")
     st.subheader("電車コレクション")
-    pending_prize = (new_result or {}).get("prize_train")
-    if len((new_result or {}).get("board") or ()) != 9:
-        pending_prize = None
-    cm_train_collection(overview.get("collection", {}), pending_prize)
+    cm_train_collection(collection, pending_prize, recent_new=recent_new)
 
 
 def render_navigation() -> None:
