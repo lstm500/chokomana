@@ -2400,6 +2400,8 @@ def render_navigation() -> None:
                     if page == "today":
                         _open_today()
                     else:
+                        if page == "analysis" and st.session_state.cm_page != page:
+                            st.session_state.pop("cm_plan_balance_editor_open", None)
                         st.session_state.cm_page = page
                     st.rerun()
 
@@ -3898,74 +3900,115 @@ def cm_change_plan_source(source, exclude):
         '自動出題から外しました。' if exclude else '自動出題の停止を解除しました。')
 
 
+def cm_subject_balance_list(values):
+    rows = ''.join(f'<li><span>{html.escape(label)}</span><strong>{values[subject]}％</strong></li>'
+                   for subject, (label, _) in CM_SCHOOL_SUBJECTS.items())
+    return (
+        '<style>.cm-balance-list{list-style:none;padding:0;margin:0;max-width:15rem;'
+        'color:var(--cm-ink,#24344e);font-size:.9rem;line-height:1.35}'
+        '.cm-balance-list li{display:flex;justify-content:space-between;gap:1rem;'
+        'margin:0;padding:.14rem 0;border-bottom:1px solid #dce4ef}'
+        '.cm-balance-list li:last-child{border-bottom:0}'
+        '.cm-balance-list strong{font-variant-numeric:tabular-nums;text-align:right}</style>'
+        f'<ul class="cm-balance-list" role="list" aria-label="現在の教科配分">{rows}</ul>'
+    )
+
+
+def cm_toggle_subject_balance_editor():
+    key = 'cm_plan_balance_editor_open'
+    st.session_state[key] = not st.session_state.get(key, False)
+
+
 @st.fragment
-def render_subject_balance():
-    with st.container(border=True, key='cm_subject_balance'):
-        st.markdown('**「きょう やること」の教科配分**')
+def render_subject_balance(manager_url=''):
+    with st.container(key='cm_subject_balance'):
+        expanded = st.session_state.get('cm_plan_balance_editor_open', False)
+        cm_button('きょう やること', key='cm_plan_balance_editor_toggle',
+                  icon=':material/expand_less:' if expanded else ':material/expand_more:',
+                  on_click=cm_toggle_subject_balance_editor)
+        if not expanded:
+            return
+
+        st.markdown('**教科配分**')
+        summary = st.empty()
         try:
             settings = cm_plan_balance()
         except (RuntimeError, ValueError) as exc:
             cm_diag_record('operation', 'cm_plan_balance', status='error', error=exc)
-            cm_error('教科配分を読み込めませんでした。ページを開き直してお試しください。')
-            return
-        values, available = settings['values'], settings['available']
-        st.caption('学習時間の目安を％で指定し、分類ごとに自動出題を切り替えます。')
-        if not available:
-            st.info('配分を保存するには、管理者によるデータベースの初期設定が必要です。')
-        elif not settings['can_exclude']:
-            st.info('分類を切り替えるには、管理者によるデータベースの更新が必要です。')
-        st.markdown(
-            '<style>.cm-balance-total{margin:.25rem 0 .5rem;font-weight:650}'
-            '.cm-balance-total strong{font-size:1.25em}.cm-balance-total span{margin-inline-start:.6em}'
-            '.cm-balance-total-ok span{color:#237264}.cm-balance-total-warn span{color:#aa4422}'
-            '@media(max-width:640px){.st-key-cm_subject_balance [data-testid=stHorizontalBlock]'
-            '{flex-wrap:wrap}.st-key-cm_subject_balance [data-testid=stHorizontalBlock] > [data-testid=stColumn]'
-            '{flex:1 1 43%;min-width:0;width:auto}}</style>', unsafe_allow_html=True)
-        with st.container(border=True):
-            titles = {app['id']: app['title'] for app in APP_DEFINITIONS}
-            columns = st.columns(len(CM_SCHOOL_SUBJECTS), gap='small')
-            chosen = {}
-            for column, (subject, (label, sources)) in zip(columns, CM_SCHOOL_SUBJECTS.items()):
-                chosen[subject] = column.number_input(f'{label}（％）', min_value=0, max_value=100,
-                    value=values[subject], step=1, key='cm_plan_balance_' + subject, disabled=not available)
-                if not sources:
-                    column.caption('未連携')
-                for source in sources:
-                    excluded = source in settings['excluded']
-                    with column.container(border=True):
-                        st.markdown(f'**{titles[source]}**')
-                        if excluded:
-                            st.caption('自動出題を停止中')
-                        cm_button('再開する' if excluded else '学習しない',
-                                  key='cm_plan_source_' + source,
-                                  type='primary' if excluded else 'secondary',
-                                  help=titles[source] + 'の自動出題を切り替える',
-                                  disabled=not settings['can_exclude'], use_container_width=True,
-                                  on_click=cm_change_plan_source, args=(source, not excluded))
-            total = sum(chosen.values())
-            gap = 100 - total
-            status = '配分OK' if gap == 0 else (f'あと{gap}％' if gap > 0 else f'{-gap}％超過')
-            tone = 'ok' if gap == 0 else 'warn'
-            st.markdown(f'<p class="cm-balance-total cm-balance-total-{tone}" role="status">'
-                        f'合計 <strong>{total}％</strong> / 100％<span>{status}</span></p>',
-                        unsafe_allow_html=True)
-            saved = cm_button('教科配分を保存', key='cm_plan_balance_save', disabled=not available or gap != 0)
-        if saved:
-            try:
-                cm_save_subject_balance(chosen)
-            except ValueError as exc:
-                cm_error(str(exc))
-            except RuntimeError as exc:
-                cm_diag_record('operation', 'cm_save_subject_balance', status='error', error=exc)
-                cm_error('教科配分の保存を確認できませんでした。もう一度お試しください。')
-            else:
-                st.success('教科配分を保存しました。今日の残りの課題に反映します。')
-        if error := st.session_state.pop('cm_plan_source_error', None):
-            cm_error(error)
-        if message := st.session_state.pop('cm_plan_source_message', None):
-            st.success(message)
-        st.caption('0％の教科と、出題できる単元がない教科は自動出題の対象外です。'
-                   '単元がない教科の時間は、配分がある他の教科で調整します。')
+            with summary.container():
+                cm_error('教科配分を読み込めませんでした。ページを開き直してお試しください。')
+            settings = None
+
+        if manager_url:
+            st.link_button('保護者の設定を開く', manager_url)
+            st.caption('教科配分、重点単元、修了認定は「ちょこまな みまもり」で変更できます。')
+
+        if settings is not None:
+            values = settings['values'] if manager_url else render_subject_balance_editor(settings)
+            summary.markdown(cm_subject_balance_list(values), unsafe_allow_html=True)
+
+
+def render_subject_balance_editor(settings):
+    values, available = settings['values'], settings['available']
+    st.caption('学習時間の目安を％で指定し、分類ごとに自動出題を切り替えます。')
+    if not available:
+        st.info('配分を保存するには、管理者によるデータベースの初期設定が必要です。')
+    elif not settings['can_exclude']:
+        st.info('分類を切り替えるには、管理者によるデータベースの更新が必要です。')
+    st.markdown(
+        '<style>.cm-balance-total{margin:.25rem 0 .5rem;font-weight:650}'
+        '.cm-balance-total strong{font-size:1.25em}.cm-balance-total span{margin-inline-start:.6em}'
+        '.cm-balance-total-ok span{color:#237264}.cm-balance-total-warn span{color:#aa4422}'
+        '@media(max-width:640px){.st-key-cm_subject_balance [data-testid=stHorizontalBlock]'
+        '{flex-wrap:wrap}.st-key-cm_subject_balance [data-testid=stHorizontalBlock] > [data-testid=stColumn]'
+        '{flex:1 1 43%;min-width:0;width:auto}}</style>', unsafe_allow_html=True)
+    with st.container(border=True):
+        titles = {app['id']: app['title'] for app in APP_DEFINITIONS}
+        columns = st.columns(len(CM_SCHOOL_SUBJECTS), gap='small')
+        chosen = {}
+        for column, (subject, (label, sources)) in zip(columns, CM_SCHOOL_SUBJECTS.items()):
+            chosen[subject] = column.number_input(f'{label}（％）', min_value=0, max_value=100,
+                value=values[subject], step=1, key='cm_plan_balance_' + subject, disabled=not available)
+            if not sources:
+                column.caption('未連携')
+            for source in sources:
+                excluded = source in settings['excluded']
+                with column.container(border=True):
+                    st.markdown(f'**{titles[source]}**')
+                    if excluded:
+                        st.caption('自動出題を停止中')
+                    cm_button('再開する' if excluded else '学習しない',
+                              key='cm_plan_source_' + source,
+                              type='primary' if excluded else 'secondary',
+                              help=titles[source] + 'の自動出題を切り替える',
+                              disabled=not settings['can_exclude'], use_container_width=True,
+                              on_click=cm_change_plan_source, args=(source, not excluded))
+        total = sum(chosen.values())
+        gap = 100 - total
+        status = '配分OK' if gap == 0 else (f'あと{gap}％' if gap > 0 else f'{-gap}％超過')
+        tone = 'ok' if gap == 0 else 'warn'
+        st.markdown(f'<p class="cm-balance-total cm-balance-total-{tone}" role="status">'
+                    f'合計 <strong>{total}％</strong> / 100％<span>{status}</span></p>',
+                    unsafe_allow_html=True)
+        saved = cm_button('教科配分を保存', key='cm_plan_balance_save', disabled=not available or gap != 0)
+    if saved:
+        try:
+            cm_save_subject_balance(chosen)
+        except ValueError as exc:
+            cm_error(str(exc))
+        except RuntimeError as exc:
+            cm_diag_record('operation', 'cm_save_subject_balance', status='error', error=exc)
+            cm_error('教科配分の保存を確認できませんでした。もう一度お試しください。')
+        else:
+            values = chosen
+            st.success('教科配分を保存しました。今日の残りの課題に反映します。')
+    if error := st.session_state.pop('cm_plan_source_error', None):
+        cm_error(error)
+    if message := st.session_state.pop('cm_plan_source_message', None):
+        st.success(message)
+    st.caption('0％の教科と、出題できる単元がない教科は自動出題の対象外です。'
+               '単元がない教科の時間は、配分がある他の教科で調整します。')
+    return values
 
 
 def cm_step_plan_age(delta):
@@ -4864,11 +4907,26 @@ def cm_analysis_review_units(apps):
         for entry in units.values():
             short, _, count, _ = entry['moving']
             if count >= 5 and short is not None and short < CM_ANALYSIS_REVIEW_THRESHOLD:
-                pending.append((short, source, entry['label']))
-    return sorted(pending, key=lambda row: (row[0], row[1], row[2]))
+                pending.append((short, source, entry))
+    return sorted(pending, key=lambda row: (row[0], row[1], row[2]['label'], row[2]['menu_id']))
 
 
-def render_analysis_review(apps):
+def cm_apply_analysis_unit_change(source, menu_id, label, kind, active, version):
+    try:
+        cm_analysis_set_unit(source, menu_id, kind, not active, version)
+    except (RuntimeError, ValueError, TypeError, KeyError) as exc:
+        cm_diag_record('operation', 'cm_analysis_set_unit', status='error', error=exc)
+        st.session_state['cm_analysis_error'] = (
+            str(exc) if isinstance(exc, ValueError) else '保存できませんでした。「記録を更新」で確認してください。')
+    else:
+        st.session_state.pop('cm_plan_snapshot', None)
+        verb = ('重点を解除しました。' if active else '重点単元に設定しました。') if kind == 'focus' else (
+            '修了認定を取り消しました。' if active else '修了認定しました。')
+        st.session_state['cm_analysis_message'] = label + ('の' if active else 'を') + verb
+    st.rerun()
+
+
+def render_analysis_review(apps, saved_by_source, manager_url):
     pending = cm_analysis_review_units(apps)
     st.markdown(f'**要確認 · {len(pending)}単元**')
     st.caption(f'採点済みの完了記録が5回以上あり、直近5回の平均正答率が'
@@ -4876,23 +4934,53 @@ def render_analysis_review(apps):
     if not pending:
         st.caption('該当する単元はありません。')
         return
-    rows = []
-    for rate, source, label in pending:
-        title = html.escape(f'{SUBJECT_NAMES[source]} · {label}').replace('|', '&#124;').replace('\n', ' ')
-        rows.append(f'| {title} | {rate:.1%} |')
-    with st.container(**({'height': 245} if len(rows) > 6 else {})):
-        st.markdown('\n'.join(['| 単元 | 直近5回平均 |', '| :--- | ---: |', *rows]))
+
+    st.markdown('''<style>
+    .st-key-cm_analysis_review [data-testid="stHorizontalBlock"] {
+      flex-wrap:nowrap!important; gap:6px!important;
+    }
+    .st-key-cm_analysis_review [data-testid="stColumn"] {min-width:0!important;}
+    .st-key-cm_analysis_review [data-testid="stVerticalBlock"] {gap:3px;}
+    .st-key-cm_analysis_review [data-testid="stMarkdownContainer"] p {
+      margin:0; font-size:.82rem; overflow-wrap:anywhere;
+    }
+    .st-key-cm_analysis_review button, .st-key-cm_analysis_review [data-testid="stLinkButton"] a {
+      padding:4px 5px; min-height:36px;
+    }
+    </style>''', unsafe_allow_html=True)
+    widths = (2.3, 1, 1.25)
+    with st.container(key='cm_analysis_review', **({'height': 310} if len(pending) > 6 else {})):
+        for col, label in zip(st.columns(widths, gap='small'), ('単元', '直近5回平均', '重点単元')):
+            col.markdown(f'**{label}**')
+        for rate, source, entry in pending:
+            name_col, rate_col, action_col = st.columns(widths, gap='small', vertical_alignment='center')
+            title = html.escape(f"{SUBJECT_NAMES[source]} · {entry['label']}").replace('\n', ' ')
+            name_col.markdown(f'<p>{title}</p>', unsafe_allow_html=True)
+            rate_col.markdown(f'{rate:.1%}')
+            menu_id = entry['menu_id']
+            saved = saved_by_source.get(source, {})
+            focus = saved.get('focus:' + menu_id) or {}
+            certificate = saved.get('unit:' + menu_id) or {}
+            with action_col:
+                if isinstance(certificate.get('record'), dict):
+                    st.caption('修了済み')
+                elif isinstance(focus.get('record'), dict):
+                    st.caption('設定中')
+                elif manager_url:
+                    st.link_button('みまもりで設定', manager_url, use_container_width=True)
+                else:
+                    version = focus.get('version')
+                    ident = hashlib.sha256(json.dumps([source, menu_id], ensure_ascii=False).encode()).hexdigest()[:20]
+                    if cm_button('重点にする', key=f'cm_analysis_review_focus_{ident}_{version}',
+                                 use_container_width=True, help=entry['label']):
+                        cm_apply_analysis_unit_change(source, menu_id, entry['label'], 'focus', False, version)
 
 
 def render_analysis_management():
     st.subheader('分析・管理')
     review_area = st.container()
     manager_url = cm_mimamori_url()
-    if manager_url:
-        st.link_button('保護者の設定を開く', manager_url)
-        st.caption('教科配分、重点単元、修了認定は「ちょこまな みまもり」で変更できます。')
-    else:
-        render_subject_balance()
+    render_subject_balance(manager_url)
     profile = st.session_state['cm_profile']
     app_col, refresh_col = st.columns([3, 1], gap='small', vertical_alignment='bottom')
     with app_col:
@@ -4911,8 +4999,6 @@ def render_analysis_management():
             with review_area, st.spinner('学習記録を集計しています…'):
                 cached['apps'].update(cm_analysis_load(missing, profile))
         st.session_state['cm_analysis_data_v3'] = cached
-        with review_area:
-            render_analysis_review(cached['apps'])
         states = cm_graduation_states(profile)
         if any(row['profile_id'] != profile for row in states):
             raise RuntimeError('analysis graduation owner mismatch')
@@ -4921,6 +5007,9 @@ def render_analysis_management():
         cm_diag_record('operation', 'cm_analysis_load', status='error', error=exc)
         cm_error('学習記録を読み込めませんでした。「記録を更新」で再試行してください。')
         return
+
+    with review_area:
+        render_analysis_review(cached['apps'], saved_by_source, manager_url)
 
     units = {(source, key): dict(entry)
              for source in sources for key, entry in cached['apps'][source].items()}
@@ -5016,18 +5105,7 @@ def render_analysis_management():
                     if cm_button(labels[active], key=f'cm_analysis_{kind}_{unit_key}_{version}_{active}',
                                  type='primary' if active else 'secondary', use_container_width=True,
                                  help=entry['label'], disabled=kind == 'focus' and entry['graduated']):
-                        try:
-                            cm_analysis_set_unit(source, entry['menu_id'], kind, not active, version)
-                        except (RuntimeError, ValueError, TypeError, KeyError) as exc:
-                            cm_diag_record('operation', 'cm_analysis_set_unit', status='error', error=exc)
-                            st.session_state['cm_analysis_error'] = (
-                                str(exc) if isinstance(exc, ValueError) else '保存できませんでした。「記録を更新」で確認してください。')
-                        else:
-                            st.session_state.pop('cm_plan_snapshot', None)
-                            verb = ('重点を解除しました。' if active else '重点単元に設定しました。') if kind == 'focus' else (
-                                '修了認定を取り消しました。' if active else '修了認定しました。')
-                            st.session_state['cm_analysis_message'] = entry['label'] + 'の' + verb if active else entry['label'] + 'を' + verb
-                        st.rerun()
+                        cm_apply_analysis_unit_change(source, entry['menu_id'], entry['label'], kind, active, version)
 
     st.caption('5回平均・15回平均は、同じ単元で完了した学習の正答率を1回ずつ同じ重みで平均します。'
                '回数が足りないときは、集計した回数を表示します。')
