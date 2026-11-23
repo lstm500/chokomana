@@ -4789,7 +4789,7 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
         if finished_at := ended.get(attempt):
             recent_by_menu.setdefault(started[attempt], []).append((finished_at, attempt, correct, total))
     for (_, menu_id), entry in units.items():
-        recent = sorted(recent_by_menu.get(menu_id, ()), reverse=True)[:16]
+        recent = sorted(recent_by_menu.get(menu_id, ()), reverse=True)[:15]
         entry['moving'] = cm_analysis_moving_averages([(correct, total) for _, _, correct, total in recent])
     return units
 
@@ -4879,15 +4879,10 @@ def cm_analysis_moving_averages(scores):
     short = average(rates[:5])
     long = average(rates[:15])
     trend = '—'
-    if len(rates) >= 15:
-        trend = '短期が上' if short > long else '短期が下' if short < long else '同水準'
-    if len(rates) >= 16:
-        previous_short = average(rates[1:6])
-        previous_long = average(rates[1:16])
-        if short > long and previous_short <= previous_long:
-            trend = '↑ 上抜け'
-        elif short < long and previous_short >= previous_long:
-            trend = '↓ 下抜け'
+    if len(rates) >= 5 and short < Fraction(7, 10):
+        trend = '×'
+    elif len(rates) >= 15 and short - long >= Fraction(1, 10):
+        trend = '☆'
     return (float(short) if short is not None else None,
             float(long) if long is not None else None, min(len(rates), 15), trend)
 
@@ -4899,7 +4894,7 @@ def cm_analysis_average_label(rate, count, window):
 
 
 CM_ANALYSIS_REVIEW_THRESHOLD = 0.70
-CM_ANALYSIS_GRADUATION_RECOMMENDATION = (0.95, 0.90)
+CM_ANALYSIS_GRADUATION_RECOMMENDATION = 0.90
 
 
 def cm_analysis_review_units(apps):
@@ -4913,19 +4908,17 @@ def cm_analysis_review_units(apps):
 
 
 def cm_analysis_recommended_units(apps, saved_by_source):
-    short_threshold, long_threshold = CM_ANALYSIS_GRADUATION_RECOMMENDATION
     recommended = []
     for source, units in apps.items():
         saved = saved_by_source.get(source, {})
         for entry in units.values():
-            short, long, count, _ = entry['moving']
-            if (count < 15 or short is None or long is None
-                    or short <= short_threshold or long <= long_threshold):
+            short, _, count, _ = entry['moving']
+            if count < 5 or short is None or short < CM_ANALYSIS_GRADUATION_RECOMMENDATION:
                 continue
             certificate = saved.get('unit:' + entry['menu_id']) or {}
             if not isinstance(certificate.get('record'), dict):
-                recommended.append((short, long, source, entry))
-    return sorted(recommended, key=lambda row: (-row[0], -row[1], row[2], row[3]['label'], row[3]['menu_id']))
+                recommended.append((short, source, entry))
+    return sorted(recommended, key=lambda row: (-row[0], row[1], row[2]['label'], row[2]['menu_id']))
 
 
 def cm_apply_analysis_unit_change(source, menu_id, label, kind, active, version):
@@ -4982,24 +4975,22 @@ def render_analysis_review(apps, saved_by_source, manager_url):
 
 def render_analysis_recommended(apps, saved_by_source):
     recommended = cm_analysis_recommended_units(apps, saved_by_source)
-    short, long = CM_ANALYSIS_GRADUATION_RECOMMENDATION
     st.markdown(f'#### 修了推奨（{len(recommended)}単元）')
-    st.caption(f'採点済みの完了記録が15回以上あり、直近5回の平均正答率が{short:.0%}超、'
-               f'直近15回の平均正答率が{long:.0%}超の未認定単元を表示します。')
+    st.caption(f'採点済みの完了記録が5回以上あり、直近5回の平均正答率が'
+               f'{CM_ANALYSIS_GRADUATION_RECOMMENDATION:.0%}以上の未認定単元を表示します。')
     if not recommended:
         st.caption('該当する単元はありません。')
         return
 
-    widths = (2.3, 1, 1)
+    widths = (2.3, 1)
     with st.container(key='cm_analysis_recommended', **({'height': 270} if len(recommended) > 6 else {})):
-        for col, label in zip(st.columns(widths, gap='small'), ('単元', '5回平均', '15回平均')):
+        for col, label in zip(st.columns(widths, gap='small'), ('単元', '5回平均')):
             col.markdown(f'**{label}**')
-        for short_rate, long_rate, source, entry in recommended:
-            name_col, short_col, long_col = st.columns(widths, gap='small', vertical_alignment='center')
+        for rate, source, entry in recommended:
+            name_col, rate_col = st.columns(widths, gap='small', vertical_alignment='center')
             title = html.escape(f"{SUBJECT_NAMES[source]} · {entry['label']}").replace('\n', ' ')
             name_col.markdown(f'<p>{title}</p>', unsafe_allow_html=True)
-            short_col.markdown(f'{short_rate:.1%}')
-            long_col.markdown(f'{long_rate:.1%}')
+            rate_col.markdown(f'{rate:.1%}')
 
 
 def render_analysis_management():
@@ -5152,8 +5143,8 @@ def render_analysis_management():
 
     st.caption('5回平均・15回平均は、同じ単元で完了した学習の正答率を1回ずつ同じ重みで平均します。'
                '回数が足りないときは、集計した回数を表示します。')
-    st.caption('上抜け・下抜けは、前回と今回で5回平均と15回平均の位置が入れ替わったときに表示します。'
-               '判定には16回分の採点記録が必要です。')
+    st.caption('☆は直近5回の平均が直近15回の平均より10ポイント以上高い単元、'
+               '×は直近5回の平均が70％未満の単元です。両方に当てはまる場合は×を表示します。')
     st.caption('正答率は自動採点された最初の回答で集計します。過去の記録は、保存済みの正解数と出題数を使います。')
     st.caption('重点単元は「きょう やること」で優先します。修了認定すると重点を解除します。')
 
