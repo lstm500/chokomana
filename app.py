@@ -2713,8 +2713,81 @@ def render_speech_rhythm(rows, levels, profile, target_day, awarded):
     )
 
 
+def cm_gold_appeal_rows(rows):
+    medals = {}
+    for row in rows:
+        source, attempt = row.get('source_app'), row.get('attempt_id')
+        if (row.get('grade') == 'gold' and source in SUBJECT_NAMES
+                and isinstance(attempt, str) and 0 < len(attempt) <= 160):
+            medals.setdefault((source, attempt), row)
+    return medals
+
+
+def cm_gold_appeals_sent(profile, attempts):
+    if st.session_state.get('cm_profile') != profile:
+        raise RuntimeError('学習者を確認できません。')
+    cached = st.session_state.get('cm_show_gold_sent')
+    if cached is None or cached['profile'] != profile or time.monotonic() - cached['at'] >= 15:
+        cached = {'profile': profile, 'at': time.monotonic(), 'checked': set(), 'sent': set()}
+        st.session_state['cm_show_gold_sent'] = cached
+    pending = sorted(attempts - cached['checked'])
+    for start in range(0, len(pending), 40):
+        batch = set(pending[start:start + 40])
+        ids = sorted({attempt for _, attempt in batch})
+        quoted = ','.join(json.dumps(ident, ensure_ascii=False) for ident in ids)
+        rows = cm_account_request('GET', '/rest/v1/cm_watch_show_requests', params={
+            'profile_id': 'eq.' + profile, 'select': 'source_app,attempt_id',
+            'attempt_id': 'in.(' + quoted + ')',
+        })
+        if not isinstance(rows, list):
+            raise RuntimeError('送信状況を確認できません。')
+        cached['sent'].update((row['source_app'], row['attempt_id']) for row in rows
+                              if (row['source_app'], row['attempt_id']) in batch)
+        cached['checked'].update(batch)
+    return cached['sent']
+
+
+def render_gold_appeals(profile, gold, *, location):
+    if not gold:
+        return
+    try:
+        sent = cm_gold_appeals_sent(profile, set(gold))
+    except (RuntimeError, ValueError, TypeError, KeyError):
+        sent = set()
+        st.caption('送信状況を確認できませんでした。')
+    st.markdown('**金メダルを おうちの人に アピール**')
+    for (source, attempt), row in gold.items():
+        label = cm_notice_plain(row.get('category_label') or '学習')
+        correct, total = row.get('correct_count'), row.get('total_count')
+        details = f' · {correct}/{total}問' if type(total) is int and total > 0 and type(correct) is int else ''
+        name_col, button_col = st.columns([3, 2], gap='small', vertical_alignment='center')
+        name_col.text(SUBJECT_NAMES[source] + ' · ' + label + details)
+        ident = hashlib.sha256(json.dumps([profile, source, attempt]).encode()).hexdigest()[:32]
+        with button_col:
+            if cm_button('とどけたよ！' if (source, attempt) in sent else 'アピールする',
+                         key=f'cm_show_gold_{location}_{ident}', disabled=(source, attempt) in sent,
+                         use_container_width=True, help=label):
+                try:
+                    result = cm_watch_request('child_show_result', target_source=source, attempt_id=attempt)
+                    if not isinstance(result, dict) or result.get('ok') is not True:
+                        raise RuntimeError('送信を確認できません。もう一度お試しください。')
+                except RuntimeError as exc:
+                    cm_error(str(exc))
+                else:
+                    cached = st.session_state.get('cm_show_gold_sent')
+                    if not cached or cached['profile'] != profile:
+                        cached = {'profile': profile, 'at': time.monotonic(), 'checked': set(), 'sent': set()}
+                        st.session_state['cm_show_gold_sent'] = cached
+                    cached['checked'].add((source, attempt))
+                    cached['sent'].add((source, attempt))
+                    st.session_state.pop('cm_show_results', None)
+                    st.rerun()
+
+
 @st.fragment
-def render_show_results(profile: str, day: date) -> None:
+def render_show_results(profile: str, day: date, medal_rows=()) -> None:
+    gold = cm_gold_appeal_rows(reversed(medal_rows))
+    render_gold_appeals(profile, gold, location='today')
     cache_key = 'cm_show_results'
     cached = st.session_state.get(cache_key)
     scope = (profile, day)
@@ -2728,11 +2801,10 @@ def render_show_results(profile: str, day: date) -> None:
             return
         cached = {'scope': scope, 'at': time.monotonic(), 'rows': result['rows']}
         st.session_state[cache_key] = cached
-    rows = cached['rows']
-    if not rows:
+    by_attempt = {(row['source_app'], row['attempt_id']): row for row in cached['rows']
+                  if (row['source_app'], row['attempt_id']) not in gold}
+    if not by_attempt:
         return
-
-    by_attempt = {(row['source_app'], row['attempt_id']): row for row in rows}
 
     def label(attempt: tuple[str, str]) -> str:
         row = by_attempt[attempt]
@@ -2777,7 +2849,7 @@ def render_today(url: str, key: str, profile: str, missing: list[str]) -> None:
         return
     rows = st.session_state.get("cm_today_rows")
     if not missing:
-        render_show_results(profile, today)
+        render_show_results(profile, today, rows or ())
     if rows is not None:
         render_stamp_book(rows, today, bool(st.session_state.get("cm_today_truncated")),
                           speech_profile=profile)
@@ -5434,6 +5506,11 @@ def render_daily_plan(apps, return_event=None):
                 links={}
                 cm_error('単元の起動リンクを作れませんでした。もう一度更新してください。')
             st.markdown(cm_plan_items_html(visible_items,links),unsafe_allow_html=True)
+            gold = cm_gold_appeal_rows(
+                {**medal, 'source_app': item['source_app'], 'category_label': item.get('label') or item['menu_id']}
+                for item in visible_items for medal in item.get('medals', ())
+            )
+            render_gold_appeals(profile, gold, location='plan')
             st.caption('ボタンから単元を別タブで開きます。学習記録の同期後、戻ると達成状況を更新します。')
         else:
             st.info('今日の配分と学習状況から選べる課題がありません。')
