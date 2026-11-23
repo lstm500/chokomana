@@ -4855,8 +4855,38 @@ def cm_analysis_average_label(rate, count, window):
     return f'{rate:.1%}' + (f'（{count}回）' if count < window else '')
 
 
+CM_ANALYSIS_REVIEW_THRESHOLD = 0.70
+
+
+def cm_analysis_review_units(apps):
+    pending = []
+    for source, units in apps.items():
+        for entry in units.values():
+            short, _, count, _ = entry['moving']
+            if count >= 5 and short is not None and short < CM_ANALYSIS_REVIEW_THRESHOLD:
+                pending.append((short, source, entry['label']))
+    return sorted(pending, key=lambda row: (row[0], row[1], row[2]))
+
+
+def render_analysis_review(apps):
+    pending = cm_analysis_review_units(apps)
+    st.markdown(f'**要確認 · {len(pending)}単元**')
+    st.caption(f'採点済みの完了記録が5回以上あり、直近5回の平均正答率が'
+               f'{CM_ANALYSIS_REVIEW_THRESHOLD:.0%}未満の単元を表示します。')
+    if not pending:
+        st.caption('該当する単元はありません。')
+        return
+    rows = []
+    for rate, source, label in pending:
+        title = html.escape(f'{SUBJECT_NAMES[source]} · {label}').replace('|', '&#124;').replace('\n', ' ')
+        rows.append(f'| {title} | {rate:.1%} |')
+    with st.container(**({'height': 245} if len(rows) > 6 else {})):
+        st.markdown('\n'.join(['| 単元 | 直近5回平均 |', '| :--- | ---: |', *rows]))
+
+
 def render_analysis_management():
     st.subheader('分析・管理')
+    review_area = st.container()
     manager_url = cm_mimamori_url()
     if manager_url:
         st.link_button('保護者の設定を開く', manager_url)
@@ -4876,11 +4906,13 @@ def render_analysis_management():
     try:
         if refresh or not cached or cached.get('profile') != profile or time.monotonic() - cached['at'] >= 30:
             cached = {'profile': profile, 'at': time.monotonic(), 'apps': {}}
-        missing = tuple(source for source in sources if source not in cached['apps'])
+        missing = tuple(source for source in SUBJECT_NAMES if source not in cached['apps'])
         if missing:
-            with st.spinner('学習記録を集計しています…'):
+            with review_area, st.spinner('学習記録を集計しています…'):
                 cached['apps'].update(cm_analysis_load(missing, profile))
         st.session_state['cm_analysis_data_v3'] = cached
+        with review_area:
+            render_analysis_review(cached['apps'])
         states = cm_graduation_states(profile)
         if any(row['profile_id'] != profile for row in states):
             raise RuntimeError('analysis graduation owner mismatch')
