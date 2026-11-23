@@ -4534,14 +4534,13 @@ def cm_plan_launch_links(items, apps):
 
 
 def cm_analysis_units(catalog, events, stamps, source, profile):
-    """Aggregate first attempts for active, individual catalog units."""
+    """Aggregate unit totals and completed, automatically scored attempts."""
     import unicodedata
 
     def normalized(value):
         return ''.join(unicodedata.normalize('NFKC', str(value or '')).split())
 
     units = {}
-    score_methods = {}
 
     def record(entry, attempt, when):
         entry['attempts'].add(attempt)
@@ -4580,7 +4579,6 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
             continue
         if english_version is not None and row.get('content_version') != english_version:
             continue
-        score_methods[menu_id] = payload.get('assessment_method')
         units[('menu', menu_id)] = {'label': label, 'menu_id': menu_id, 'correct': 0,
                                    'total': 0, 'attempts': set(), 'last': None}
 
@@ -4592,26 +4590,28 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
     rows = sorted(unique.values(), key=lambda row: (
         cm_plan_date(row['occurred_at']) or datetime.min.replace(tzinfo=timezone.utc),
         row['sequence'], row['event_id']))
-    starts, items, logged_starts = {}, {}, set()
+    starts, items, logged_starts, ended = {}, {}, {}, {}
     for row in rows:
         data = row.get('payload') or {}
         attempt = row['attempt_id']
         if row['event_type'] == 'session_started' and data.get('menu_id'):
-            logged_starts.add(attempt)
             menu_id = data['menu_id']
+            logged_starts[attempt] = menu_id
             entry = units.get(('menu', menu_id))
             if entry is not None:
                 starts[attempt] = entry
                 record(entry, attempt, cm_plan_date(row['occurred_at']))
         elif row['event_type'] == 'item_presented' and row.get('occurrence_id'):
             items[(attempt, row['occurrence_id'])] = data
+        elif row['event_type'] == 'session_ended':
+            ended[attempt] = cm_plan_date(row['occurred_at']) if data.get('status') == 'completed' else None
 
-    seen, detailed_attempts = set(), set()
+    seen, detailed_attempts, scores = set(), set(), {}
     for row in rows:
         attempt = row['attempt_id']
-        entry = starts.get(attempt)
-        if entry is None or row['event_type'] != 'response_submitted':
+        if attempt not in logged_starts or row['event_type'] != 'response_submitted':
             continue
+        entry = starts.get(attempt)
         detailed_attempts.add(attempt)
         data = row.get('payload') or {}
         occurrence = row.get('occurrence_id')
@@ -4625,9 +4625,14 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
         if key in seen:
             continue
         seen.add(key)
-        entry['correct'] += int(data['is_correct'])
-        entry['total'] += 1
-        record(entry, attempt, cm_plan_date(row['occurred_at']))
+        right = int(data['is_correct'])
+        if entry is not None:
+            entry['correct'] += right
+            entry['total'] += 1
+            record(entry, attempt, cm_plan_date(row['occurred_at']))
+        counts = scores.setdefault(attempt, [0, 0])
+        counts[0] += right
+        counts[1] += 1
 
     seen_stamps = set()
     for row in stamps:
@@ -4637,29 +4642,35 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
         if attempt in seen_stamps or row.get('grade') not in GRADE_NAMES:
             continue
         seen_stamps.add(attempt)
-        entry = starts.get(attempt)
-        if entry is None:
-            if attempt in logged_starts:
-                continue
+        menu_id = logged_starts.get(attempt)
+        if menu_id is None:
             category = row.get('category_key') or row.get('category_label') or ''
             difficulty = str(row.get('difficulty') or '')
             candidates = set()
             for name in (difficulty, difficulty_names.get(difficulty)):
                 candidates.update(legacy_lookup.get((normalized(category), normalized(name)), ()))
-            if len(candidates) != 1:
-                continue
-            entry = units.get(('menu', next(iter(candidates))))
-            if entry is None:
-                continue
-        record(entry, attempt, cm_plan_date(row['finished_at']))
+            if len(candidates) == 1:
+                menu_id = next(iter(candidates))
+        entry = units.get(('menu', menu_id))
+        finished_at = cm_plan_date(row['finished_at'])
+        if entry is not None:
+            record(entry, attempt, finished_at)
+        if finished_at is not None:
+            ended.setdefault(attempt, finished_at)
         correct, total = row.get('correct_count'), row.get('total_count')
-        # Historic medals are scored only for apps with automatic quiz grading.
+        # Historic medals with no detailed responses can supply the original quiz score.
+        menu_payload = (latest.get(menu_id) or {}).get('payload') or {}
         if (attempt not in detailed_attempts and source in ('kotoba', 'soroban', 'geometry', 'english', 'geography')
-                and score_methods.get(entry['menu_id']) in (None, 'automatic')
+                and menu_payload.get('assessment_method') in (None, 'automatic')
                 and type(correct) is int and type(total) is int and 0 <= correct <= total and total > 0):
-            entry['correct'] += correct
-            entry['total'] += total
-    return units
+            scores[attempt] = (correct, total)
+            if entry is not None:
+                entry['correct'] += correct
+                entry['total'] += total
+
+    recent = sorted(((ended[attempt], attempt, correct / total)
+                     for attempt, (correct, total) in scores.items() if ended.get(attempt)), reverse=True)[:15]
+    return {'units': units, 'recent': recent}
 
 
 def cm_analysis_load(sources, profile):
@@ -4670,7 +4681,7 @@ def cm_analysis_load(sources, profile):
     })
     owned = {**params, 'profile_id': 'eq.' + profile}
     events = cm_plan_rows('chokomana_learning_events', {
-        **owned, 'event_type': 'in.(session_started,item_presented,response_submitted)',
+        **owned, 'event_type': 'in.(session_started,item_presented,response_submitted,session_ended)',
         'select': 'event_id,profile_id,source_app,attempt_id,event_type,sequence,occurred_at,occurrence_id,payload',
         'order': 'occurred_at,event_id,source_app',
     })
@@ -4736,6 +4747,25 @@ def cm_analysis_set_unit(source, menu_id, kind, enabled, expected_version):
     raise RuntimeError('graduation update conflict')
 
 
+def cm_analysis_recent_rows(apps, selected):
+    groups = (CM_SCHOOL_SUBJECTS.values() if selected == 'all'
+              else [(SUBJECT_NAMES[selected], (selected,))])
+    rows = []
+    for label, sources in groups:
+        recent = sorted((attempt for source in sources for attempt in apps[source]['recent']), reverse=True)[:15]
+        cells = [label]
+        for window in (5, 15):
+            sample = recent[:window]
+            if not sample:
+                cells.append('—')
+                continue
+            average = sum(rate for _, _, rate in sample) / len(sample)
+            count = f'（{len(sample)}回）' if len(sample) < window else ''
+            cells.append(f'{average:.1%}{count}')
+        rows.append(tuple(cells))
+    return rows
+
+
 def render_analysis_management():
     st.subheader('分析・管理')
     manager_url = cm_mimamori_url()
@@ -4753,7 +4783,7 @@ def render_analysis_management():
         sources = tuple(SUBJECT_NAMES) if selected == 'all' else (selected,)
     with refresh_col:
         refresh = cm_button('記録を更新', key='cm_analysis_refresh', use_container_width=True)
-    cached = st.session_state.get('cm_analysis_data')
+    cached = st.session_state.get('cm_analysis_data_v2')
     try:
         if refresh or not cached or cached.get('profile') != profile or time.monotonic() - cached['at'] >= 30:
             cached = {'profile': profile, 'at': time.monotonic(), 'apps': {}}
@@ -4761,7 +4791,7 @@ def render_analysis_management():
         if missing:
             with st.spinner('学習記録を集計しています…'):
                 cached['apps'].update(cm_analysis_load(missing, profile))
-        st.session_state['cm_analysis_data'] = cached
+        st.session_state['cm_analysis_data_v2'] = cached
         states = cm_graduation_states(profile)
         if any(row['profile_id'] != profile for row in states):
             raise RuntimeError('analysis graduation owner mismatch')
@@ -4771,8 +4801,18 @@ def render_analysis_management():
         cm_error('学習記録を読み込めませんでした。「記録を更新」で再試行してください。')
         return
 
+    st.markdown('**直近の平均正答率**')
+    rows = cm_analysis_recent_rows(cached['apps'], selected)
+    st.markdown('\n'.join([
+        '| 教科 | 直近5回 | 直近15回 |',
+        '| :--- | ---: | ---: |',
+        *['| ' + ' | '.join(row) + ' |' for row in rows],
+    ]))
+    st.caption('完了した学習ごとに正答率を出し、各回を同じ重みで平均します。'
+               '5回・15回に満たない場合は、集計できた回数を表示します。')
+
     units = {(source, key): dict(entry)
-             for source in sources for key, entry in cached['apps'][source].items()}
+             for source in sources for key, entry in cached['apps'][source]['units'].items()}
     if message := st.session_state.pop('cm_analysis_message', None):
         st.success(message)
     if error := st.session_state.pop('cm_analysis_error', None):
