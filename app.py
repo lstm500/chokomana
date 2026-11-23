@@ -4590,16 +4590,15 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
     rows = sorted(unique.values(), key=lambda row: (
         cm_plan_date(row['occurred_at']) or datetime.min.replace(tzinfo=timezone.utc),
         row['sequence'], row['event_id']))
-    starts, items, logged_starts, ended = {}, {}, {}, {}
+    started, items, ended = {}, {}, {}
     for row in rows:
         data = row.get('payload') or {}
         attempt = row['attempt_id']
         if row['event_type'] == 'session_started' and data.get('menu_id'):
             menu_id = data['menu_id']
-            logged_starts[attempt] = menu_id
+            started[attempt] = menu_id
             entry = units.get(('menu', menu_id))
             if entry is not None:
-                starts[attempt] = entry
                 record(entry, attempt, cm_plan_date(row['occurred_at']))
         elif row['event_type'] == 'item_presented' and row.get('occurrence_id'):
             items[(attempt, row['occurrence_id'])] = data
@@ -4607,11 +4606,14 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
             ended[attempt] = cm_plan_date(row['occurred_at']) if data.get('status') == 'completed' else None
 
     seen, detailed_attempts, scores = set(), set(), {}
+    recent_by_menu = {}
     for row in rows:
         attempt = row['attempt_id']
-        if attempt not in logged_starts or row['event_type'] != 'response_submitted':
+        if row['event_type'] != 'response_submitted':
             continue
-        entry = starts.get(attempt)
+        entry = units.get(('menu', started.get(attempt)))
+        if entry is None:
+            continue
         detailed_attempts.add(attempt)
         data = row.get('payload') or {}
         occurrence = row.get('occurrence_id')
@@ -4626,10 +4628,9 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
             continue
         seen.add(key)
         right = int(data['is_correct'])
-        if entry is not None:
-            entry['correct'] += right
-            entry['total'] += 1
-            record(entry, attempt, cm_plan_date(row['occurred_at']))
+        entry['correct'] += right
+        entry['total'] += 1
+        record(entry, attempt, cm_plan_date(row['occurred_at']))
         counts = scores.setdefault(attempt, [0, 0])
         counts[0] += right
         counts[1] += 1
@@ -4642,7 +4643,7 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
         if attempt in seen_stamps or row.get('grade') not in GRADE_NAMES:
             continue
         seen_stamps.add(attempt)
-        menu_id = logged_starts.get(attempt)
+        menu_id = started.get(attempt)
         if menu_id is None:
             category = row.get('category_key') or row.get('category_label') or ''
             difficulty = str(row.get('difficulty') or '')
@@ -4652,11 +4653,13 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
             if len(candidates) == 1:
                 menu_id = next(iter(candidates))
         entry = units.get(('menu', menu_id))
+        if entry is None:
+            continue
         finished_at = cm_plan_date(row['finished_at'])
-        if entry is not None:
-            record(entry, attempt, finished_at)
+        record(entry, attempt, finished_at)
         if finished_at is not None:
             ended.setdefault(attempt, finished_at)
+        started.setdefault(attempt, menu_id)
         correct, total = row.get('correct_count'), row.get('total_count')
         # Historic medals with no detailed responses can supply the original quiz score.
         menu_payload = (latest.get(menu_id) or {}).get('payload') or {}
@@ -4664,13 +4667,16 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
                 and menu_payload.get('assessment_method') in (None, 'automatic')
                 and type(correct) is int and type(total) is int and 0 <= correct <= total and total > 0):
             scores[attempt] = (correct, total)
-            if entry is not None:
-                entry['correct'] += correct
-                entry['total'] += total
+            entry['correct'] += correct
+            entry['total'] += total
 
-    recent = sorted(((ended[attempt], attempt, correct / total)
-                     for attempt, (correct, total) in scores.items() if ended.get(attempt)), reverse=True)[:15]
-    return {'units': units, 'recent': recent}
+    for attempt, (correct, total) in scores.items():
+        if finished_at := ended.get(attempt):
+            recent_by_menu.setdefault(started[attempt], []).append((finished_at, attempt, correct, total))
+    for (_, menu_id), entry in units.items():
+        recent = sorted(recent_by_menu.get(menu_id, ()), reverse=True)[:16]
+        entry['moving'] = cm_analysis_moving_averages([(correct, total) for _, _, correct, total in recent])
+    return units
 
 
 def cm_analysis_load(sources, profile):
@@ -4747,23 +4753,34 @@ def cm_analysis_set_unit(source, menu_id, kind, enabled, expected_version):
     raise RuntimeError('graduation update conflict')
 
 
-def cm_analysis_recent_rows(apps, selected):
-    groups = (CM_SCHOOL_SUBJECTS.values() if selected == 'all'
-              else [(SUBJECT_NAMES[selected], (selected,))])
-    rows = []
-    for label, sources in groups:
-        recent = sorted((attempt for source in sources for attempt in apps[source]['recent']), reverse=True)[:15]
-        cells = [label]
-        for window in (5, 15):
-            sample = recent[:window]
-            if not sample:
-                cells.append('—')
-                continue
-            average = sum(rate for _, _, rate in sample) / len(sample)
-            count = f'（{len(sample)}回）' if len(sample) < window else ''
-            cells.append(f'{average:.1%}{count}')
-        rows.append(tuple(cells))
-    return rows
+def cm_analysis_moving_averages(scores):
+    from fractions import Fraction
+
+    rates = [Fraction(correct, total) for correct, total in scores]
+
+    def average(sample):
+        return sum(sample) / len(sample) if sample else None
+
+    short = average(rates[:5])
+    long = average(rates[:15])
+    trend = '—'
+    if len(rates) >= 15:
+        trend = '短期が上' if short > long else '短期が下' if short < long else '同水準'
+    if len(rates) >= 16:
+        previous_short = average(rates[1:6])
+        previous_long = average(rates[1:16])
+        if short > long and previous_short <= previous_long:
+            trend = '↑ 上抜け'
+        elif short < long and previous_short >= previous_long:
+            trend = '↓ 下抜け'
+    return (float(short) if short is not None else None,
+            float(long) if long is not None else None, min(len(rates), 15), trend)
+
+
+def cm_analysis_average_label(rate, count, window):
+    if rate is None:
+        return '—'
+    return f'{rate:.1%}' + (f'（{count}回）' if count < window else '')
 
 
 def render_analysis_management():
@@ -4783,7 +4800,7 @@ def render_analysis_management():
         sources = tuple(SUBJECT_NAMES) if selected == 'all' else (selected,)
     with refresh_col:
         refresh = cm_button('記録を更新', key='cm_analysis_refresh', use_container_width=True)
-    cached = st.session_state.get('cm_analysis_data_v2')
+    cached = st.session_state.get('cm_analysis_data_v3')
     try:
         if refresh or not cached or cached.get('profile') != profile or time.monotonic() - cached['at'] >= 30:
             cached = {'profile': profile, 'at': time.monotonic(), 'apps': {}}
@@ -4791,7 +4808,7 @@ def render_analysis_management():
         if missing:
             with st.spinner('学習記録を集計しています…'):
                 cached['apps'].update(cm_analysis_load(missing, profile))
-        st.session_state['cm_analysis_data_v2'] = cached
+        st.session_state['cm_analysis_data_v3'] = cached
         states = cm_graduation_states(profile)
         if any(row['profile_id'] != profile for row in states):
             raise RuntimeError('analysis graduation owner mismatch')
@@ -4801,18 +4818,8 @@ def render_analysis_management():
         cm_error('学習記録を読み込めませんでした。「記録を更新」で再試行してください。')
         return
 
-    st.markdown('**直近の平均正答率**')
-    rows = cm_analysis_recent_rows(cached['apps'], selected)
-    st.markdown('\n'.join([
-        '| 教科 | 直近5回 | 直近15回 |',
-        '| :--- | ---: | ---: |',
-        *['| ' + ' | '.join(row) + ' |' for row in rows],
-    ]))
-    st.caption('完了した学習ごとに正答率を出し、各回を同じ重みで平均します。'
-               '5回・15回に満たない場合は、集計できた回数を表示します。')
-
     units = {(source, key): dict(entry)
-             for source in sources for key, entry in cached['apps'][source]['units'].items()}
+             for source in sources for key, entry in cached['apps'][source].items()}
     if message := st.session_state.pop('cm_analysis_message', None):
         st.success(message)
     if error := st.session_state.pop('cm_analysis_error', None):
@@ -4833,7 +4840,8 @@ def render_analysis_management():
 
     ordering_col, filter_col = st.columns(2, gap='small')
     with ordering_col:
-        order = st.selectbox('並び順', ('正答率が低い順', '正答率が高い順', '学習回数が多い順', '最近の学習順'),
+        order = st.selectbox('並び順', ('正答率が低い順', '正答率が高い順', '5回平均が低い順',
+                             '5回平均が高い順', '学習回数が多い順', '最近の学習順'),
                              key='cm_analysis_order')
     with filter_col:
         status = st.selectbox('修了状態', ('すべて', '未認定', '修了認定済み'), key='cm_analysis_status')
@@ -4841,6 +4849,9 @@ def render_analysis_management():
     if order.startswith('正答率'):
         direction = -1 if order == '正答率が高い順' else 1
         ordered.sort(key=lambda pair: (not pair[1]['total'], direction * (rate(pair[1]) or 0)))
+    elif order.startswith('5回平均'):
+        direction = -1 if order == '5回平均が高い順' else 1
+        ordered.sort(key=lambda pair: (pair[1]['moving'][0] is None, direction * (pair[1]['moving'][0] or 0)))
     elif order == '学習回数が多い順':
         ordered.sort(key=lambda pair: len(pair[1]['attempts']), reverse=True)
     else:
@@ -4854,7 +4865,7 @@ def render_analysis_management():
 
     st.markdown('''<style>
     .st-key-cm_analysis_grid [data-testid="stHorizontalBlock"] {
-      flex-wrap:nowrap!important; gap:6px!important; min-width:700px;
+      flex-wrap:nowrap!important; gap:6px!important; min-width:940px;
     }
     .st-key-cm_analysis_grid [data-testid="stColumn"] {min-width:0!important;}
     .st-key-cm_analysis_grid [data-testid="stVerticalBlock"] {gap:2px;}
@@ -4865,28 +4876,27 @@ def render_analysis_management():
     .st-key-cm_analysis_grid [data-testid="stText"] * {
       color:#233c3c!important; -webkit-text-fill-color:#233c3c!important;
     }
-    .st-key-cm_analysis_grid [data-testid="stText"] {font:inherit; font-size:13px; white-space:normal;}
+    .st-key-cm_analysis_grid [data-testid="stText"] {font:inherit; font-size:13px; white-space:normal; overflow-wrap:anywhere;}
     .st-key-cm_analysis_grid button {min-height:36px; padding:3px 5px;}
     .st-key-cm_analysis_grid button p {padding:0;}
     .st-key-cm_analysis_grid [data-testid="stVerticalBlockBorderWrapper"] {overflow:auto;}
     </style>''', unsafe_allow_html=True)
-    widths = (2.1, .85, .8, .8, .9, 1.4, 1.4, 1.5)
-    headers = ('単元', '正答率', '正解数', '採点数', '学習回数', '最終学習日', '重点単元', '修了認定')
-    if selected == 'all':
-        widths = (1.35, *widths)
-        headers = ('教科', *headers)
+    widths = (2.15, 1.12, 1.12, 1.02, .85, .8, .8, .9, 1.4, 1.4, 1.5)
+    headers = ('単元', '5回平均', '15回平均', '推移', '正答率', '正解数', '採点数',
+               '学習回数', '最終学習日', '重点単元', '修了認定')
     with st.container(height=415, key='cm_analysis_grid'):
         for col, label in zip(st.columns(widths, vertical_alignment='center'), headers):
             col.markdown(f'**{label}**')
         for (source, key), entry in visible:
             cols = st.columns(widths, vertical_alignment='center')
+            short, long, count, trend = entry['moving']
+            label = entry['label'] if selected != 'all' else f"{entry['label']}（{SUBJECT_NAMES[source]}）"
             values = (
-                entry['label'], f"{rate(entry):.0%}" if entry['total'] else '—',
+                label, cm_analysis_average_label(short, count, 5), cm_analysis_average_label(long, count, 15),
+                trend, f"{rate(entry):.0%}" if entry['total'] else '—',
                 entry['correct'] if entry['total'] else '—', entry['total'], len(entry['attempts']),
                 entry['last'].astimezone(TOKYO).date().isoformat() if entry['last'] else '—',
             )
-            if selected == 'all':
-                values = (SUBJECT_NAMES[source], *values)
             for col, value in zip(cols, values):
                 col.text(str(value))
             if manager_url:
@@ -4915,6 +4925,10 @@ def render_analysis_management():
                             st.session_state['cm_analysis_message'] = entry['label'] + 'の' + verb if active else entry['label'] + 'を' + verb
                         st.rerun()
 
+    st.caption('5回平均・15回平均は、同じ単元で完了した学習の正答率を1回ずつ同じ重みで平均します。'
+               '回数が足りないときは、集計した回数を表示します。')
+    st.caption('上抜け・下抜けは、前回と今回で5回平均と15回平均の位置が入れ替わったときに表示します。'
+               '判定には16回分の採点記録が必要です。')
     st.caption('正答率は自動採点された最初の回答で集計します。過去の記録は、保存済みの正解数と出題数を使います。')
     st.caption('重点単元は「きょう やること」で優先します。修了認定すると重点を解除します。')
 
