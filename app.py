@@ -4899,6 +4899,7 @@ def cm_analysis_average_label(rate, count, window):
 
 
 CM_ANALYSIS_REVIEW_THRESHOLD = 0.70
+CM_ANALYSIS_GRADUATION_RECOMMENDATION = (0.95, 0.90)
 
 
 def cm_analysis_review_units(apps):
@@ -4909,6 +4910,22 @@ def cm_analysis_review_units(apps):
             if count >= 5 and short is not None and short < CM_ANALYSIS_REVIEW_THRESHOLD:
                 pending.append((short, source, entry))
     return sorted(pending, key=lambda row: (row[0], row[1], row[2]['label'], row[2]['menu_id']))
+
+
+def cm_analysis_recommended_units(apps, saved_by_source):
+    short_threshold, long_threshold = CM_ANALYSIS_GRADUATION_RECOMMENDATION
+    recommended = []
+    for source, units in apps.items():
+        saved = saved_by_source.get(source, {})
+        for entry in units.values():
+            short, long, count, _ = entry['moving']
+            if (count < 15 or short is None or long is None
+                    or short <= short_threshold or long <= long_threshold):
+                continue
+            certificate = saved.get('unit:' + entry['menu_id']) or {}
+            if not isinstance(certificate.get('record'), dict):
+                recommended.append((short, long, source, entry))
+    return sorted(recommended, key=lambda row: (-row[0], -row[1], row[2], row[3]['label'], row[3]['menu_id']))
 
 
 def cm_apply_analysis_unit_change(source, menu_id, label, kind, active, version):
@@ -4928,29 +4945,16 @@ def cm_apply_analysis_unit_change(source, menu_id, label, kind, active, version)
 
 def render_analysis_review(apps, saved_by_source, manager_url):
     pending = cm_analysis_review_units(apps)
-    st.markdown(f'**要確認 · {len(pending)}単元**')
+    st.markdown(f'#### 要確認（{len(pending)}単元）')
     st.caption(f'採点済みの完了記録が5回以上あり、直近5回の平均正答率が'
                f'{CM_ANALYSIS_REVIEW_THRESHOLD:.0%}未満の単元を表示します。')
     if not pending:
         st.caption('該当する単元はありません。')
         return
 
-    st.markdown('''<style>
-    .st-key-cm_analysis_review [data-testid="stHorizontalBlock"] {
-      flex-wrap:nowrap!important; gap:6px!important;
-    }
-    .st-key-cm_analysis_review [data-testid="stColumn"] {min-width:0!important;}
-    .st-key-cm_analysis_review [data-testid="stVerticalBlock"] {gap:3px;}
-    .st-key-cm_analysis_review [data-testid="stMarkdownContainer"] p {
-      margin:0; font-size:.82rem; overflow-wrap:anywhere;
-    }
-    .st-key-cm_analysis_review button, .st-key-cm_analysis_review [data-testid="stLinkButton"] a {
-      padding:4px 5px; min-height:36px;
-    }
-    </style>''', unsafe_allow_html=True)
     widths = (2.3, 1, 1.25)
     with st.container(key='cm_analysis_review', **({'height': 310} if len(pending) > 6 else {})):
-        for col, label in zip(st.columns(widths, gap='small'), ('単元', '直近5回平均', '重点単元')):
+        for col, label in zip(st.columns(widths, gap='small'), ('単元', '5回平均', '重点単元')):
             col.markdown(f'**{label}**')
         for rate, source, entry in pending:
             name_col, rate_col, action_col = st.columns(widths, gap='small', vertical_alignment='center')
@@ -4976,9 +4980,32 @@ def render_analysis_review(apps, saved_by_source, manager_url):
                         cm_apply_analysis_unit_change(source, menu_id, entry['label'], 'focus', False, version)
 
 
+def render_analysis_recommended(apps, saved_by_source):
+    recommended = cm_analysis_recommended_units(apps, saved_by_source)
+    short, long = CM_ANALYSIS_GRADUATION_RECOMMENDATION
+    st.markdown(f'#### 修了推奨（{len(recommended)}単元）')
+    st.caption(f'採点済みの完了記録が15回以上あり、直近5回の平均正答率が{short:.0%}超、'
+               f'直近15回の平均正答率が{long:.0%}超の未認定単元を表示します。')
+    if not recommended:
+        st.caption('該当する単元はありません。')
+        return
+
+    widths = (2.3, 1, 1)
+    with st.container(key='cm_analysis_recommended', **({'height': 270} if len(recommended) > 6 else {})):
+        for col, label in zip(st.columns(widths, gap='small'), ('単元', '5回平均', '15回平均')):
+            col.markdown(f'**{label}**')
+        for short_rate, long_rate, source, entry in recommended:
+            name_col, short_col, long_col = st.columns(widths, gap='small', vertical_alignment='center')
+            title = html.escape(f"{SUBJECT_NAMES[source]} · {entry['label']}").replace('\n', ' ')
+            name_col.markdown(f'<p>{title}</p>', unsafe_allow_html=True)
+            short_col.markdown(f'{short_rate:.1%}')
+            long_col.markdown(f'{long_rate:.1%}')
+
+
 def render_analysis_management():
     st.subheader('分析・管理')
     review_area = st.container()
+    st.divider()
     manager_url = cm_mimamori_url()
     render_subject_balance(manager_url)
     profile = st.session_state['cm_profile']
@@ -5009,7 +5036,23 @@ def render_analysis_management():
         return
 
     with review_area:
-        render_analysis_review(cached['apps'], saved_by_source, manager_url)
+        st.markdown('''<style>
+        :is(.st-key-cm_analysis_review,.st-key-cm_analysis_recommended) [data-testid="stHorizontalBlock"] {
+          flex-wrap:nowrap!important; gap:6px!important; border-bottom:1px solid #dde8e4; padding:3px 0;
+        }
+        :is(.st-key-cm_analysis_review,.st-key-cm_analysis_recommended) [data-testid="stColumn"] {min-width:0!important;}
+        :is(.st-key-cm_analysis_review,.st-key-cm_analysis_recommended) [data-testid="stVerticalBlock"] {gap:3px;}
+        :is(.st-key-cm_analysis_review,.st-key-cm_analysis_recommended) [data-testid="stMarkdownContainer"] p {
+          margin:0; font-size:.85rem; overflow-wrap:anywhere;
+        }
+        .st-key-cm_analysis_review button, .st-key-cm_analysis_review [data-testid="stLinkButton"] a {
+          padding:4px 5px; min-height:36px;
+        }
+        </style>''', unsafe_allow_html=True)
+        with st.container(border=True, key='cm_analysis_review_panel'):
+            render_analysis_review(cached['apps'], saved_by_source, manager_url)
+        with st.container(border=True, key='cm_analysis_recommended_panel'):
+            render_analysis_recommended(cached['apps'], saved_by_source)
 
     units = {(source, key): dict(entry)
              for source in sources for key, entry in cached['apps'][source].items()}
