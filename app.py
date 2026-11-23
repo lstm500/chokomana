@@ -302,12 +302,22 @@ def cm_kotoba_audio_bridge():
             response = {'id': request_id, '_profile': profile, 'status': 'waiting'}
             try:
                 url, key = cm_service_config()
-                rows = cm_api_request(url, 'GET', '/rest/v1/chokomana_launch_tickets', key=key, timeout=3, params={
+                filters = {
                     'select': 'kotoba_audio', 'ticket_hash': 'eq.' + ticket_hash,
                     'profile_id': 'eq.' + profile, 'source_app': 'eq.kotoba', 'used_at': 'not.is.null',
                     'plan_item_id': 'not.is.null', 'expires_at': 'gt.' + datetime.now(timezone.utc).isoformat(),
                     'limit': '1',
-                })
+                }
+                outcome = request.get('outcome')
+                if outcome in ('ended', 'failed'):
+                    outcome_filters = {k: v for k, v in filters.items() if k not in ('select', 'limit')}
+                    outcome_filters.update({'kotoba_audio->>nonce': 'eq.' + nonce, 'kotoba_audio->>status': 'eq.ready'})
+                    cm_api_request(url, 'PATCH', '/rest/v1/chokomana_launch_tickets', key=key, timeout=3,
+                                   params=outcome_filters, payload={'kotoba_audio': {'nonce': nonce, 'status': outcome}})
+                    response['status'] = outcome
+                    rows = []
+                else:
+                    rows = cm_api_request(url, 'GET', '/rest/v1/chokomana_launch_tickets', key=key, timeout=3, params=filters)
                 audio = rows[0]['kotoba_audio'] if rows else None
                 if isinstance(audio, dict) and audio.get('nonce') == nonce:
                     response.update(status=audio['status'], parts=audio.get('parts'), settings=audio.get('settings'))
@@ -5580,6 +5590,11 @@ function installKotobaLaunchAudio(w,d){
   const age=w.performance.now()-entry.openedAt;
   schedule(entry,entry.played||age>8000?1400:850);
  };
+ function reportOutcome(entry,outcome){
+  if(launch!==entry)return;
+  end(entry);
+  w.__cmKotobaAudioPoll?.({request_id:w.crypto.randomUUID(),ticket:entry.ticket,nonce:entry.nonce,outcome});
+ }
  function play(entry,data){
   if(warmup){warmup=null;w.speechSynthesis.cancel()}
   const speech={timer:null,utterance:null};active=speech;
@@ -5587,22 +5602,25 @@ function installKotobaLaunchAudio(w,d){
   const voices=w.speechSynthesis.getVoices().filter(v=>/^ja(?:[-_]|$)/i.test(v.lang||''));
   const score=v=>(/Natural|Neural|Premium|Enhanced|Online|オンライン|高品質/i.test(v.name)?100:0)+(/Google.*日本語/i.test(v.name)?60:0)+(/Microsoft/i.test(v.name)?30:0)+(v.default?10:0);
   const voice=voices.find(v=>v.voiceURI===settings.voice)||voices.sort((a,b)=>score(b)-score(a))[0];
-  const fail=reason=>{record(entry,'failed','speech_playback',{error_type:reason});end(entry)};
+  const fail=reason=>{record(entry,'failed','speech_playback',{error_type:reason});reportOutcome(entry,'failed')};
   function read(index){
    if(active!==speech)return;
    try{
     const u=new w.SpeechSynthesisUtterance(data.parts[index]);speech.utterance=u;
     u.lang='ja-JP';if(voice)u.voice=voice;
     u.rate=settings.rate;u.pitch=settings.pitch;u.volume=settings.volume;
+    let started=false;
     const current=()=>active===speech&&speech.utterance===u;
     u.onstart=()=>{if(current()){
-     w.clearTimeout(speech.timer);
+     started=true;w.clearTimeout(speech.timer);
+     speech.timer=w.setTimeout(()=>fail('end_timeout'),Math.max(20000,data.parts[index].length*500/settings.rate));
      if(index===0)record(entry,'started','speech_playback');
     }};
     u.onerror=e=>{if(current())fail(e.error||'unknown')};
     u.onend=()=>{if(current()){
      w.clearTimeout(speech.timer);
-     if(index+1===data.parts.length){record(entry,'ended','speech_playback');end(entry);return}
+     if(!started){fail('no_start_event');return}
+     if(index+1===data.parts.length){record(entry,'ended','speech_playback');reportOutcome(entry,'ended');return}
      speech.timer=w.setTimeout(()=>read(index+1),Math.round(1000*settings.pause));
     }};
     speech.timer=w.setTimeout(()=>fail('start_timeout'),3000);
