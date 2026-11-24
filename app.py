@@ -34,6 +34,8 @@ import html
 import json
 import os
 from contextlib import nullcontext
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
@@ -97,7 +99,8 @@ APP_DEFINITIONS = (
 
 # Local diagnostics: bounded timing/error metadata; never request bodies or credentials.
 CM_DIAG_LIMIT = 2000
-CM_DIAG_VERSION = 'operation-log-2-hub48'
+CM_DIAG_VERSION = 'operation-log-2-hub49'
+_CM_READ_CONTEXT = ContextVar('cm_read_context', default=None)
 
 
 def cm_diag_state():
@@ -134,6 +137,10 @@ def cm_diag_page():
 
 def cm_diag_record(kind, action, *, duration_ms=None, status='ok', error=None, **fields):
     """Allowlisted structure only; avoid adding an arbitrary payload/locals field."""
+    context = _CM_READ_CONTEXT.get()
+    if context is not None:
+        context[1].append((kind, action, dict(duration_ms=duration_ms, status=status, error=error, **fields)))
+        return
     import uuid
     d = cm_diag_state(); d['seq'] += 1
     row = {'id':str(uuid.uuid4()),'session':d['session'],'seq':d['seq'],
@@ -1077,7 +1084,7 @@ def cm_watch_request(action, **data):
 
 def cm_receipts(force=False):
     profile=st.session_state.get('cm_profile');cached=st.session_state.get('cm_receipt_cache')
-    if not force and cached and cached['profile']==profile and time.time()-cached['at']<8:return cached['data']
+    if not force and cached and cached['profile']==profile and time.time()-cached['at']<18:return cached['data']
     data=cm_watch_request('child_poll')
     data['encouragements']=cm_account_request('GET','/rest/v1/cm_watch_encouragements',params={'profile_id':'eq.'+profile,'select':'id,target_type,target_key,source_app,stamp_key,created_at,read_at,supporter:cm_watch_supporters(name,color)','order':'created_at.desc','limit':'200'}) or []
     ids=tuple(r['id'] for r in data.get('encouragements',[]))
@@ -1195,7 +1202,7 @@ def cm_receipt_jump_ui():
     except RuntimeError:st.caption('移動しましたが、既読の保存を確認できません。通知は残しています。')
 
 def cm_receipt_notice():
-    @st.fragment(run_every=10)
+    @st.fragment(run_every=20)
     def notice():
         try:data=cm_receipts();rows=cm_notice_rows(data)
         except RuntimeError:
@@ -2584,7 +2591,7 @@ def render_home(apps: list[dict]) -> None:
         st.markdown(home_cards_html(apps), unsafe_allow_html=True)
         cm_diag_mark_ready()
     launch_cards()
-    @st.fragment(run_every=10)
+    @st.fragment(run_every=30)
     def daily_assignments():
         try:
             event = cm_plan_return_event()
@@ -2926,8 +2933,8 @@ def main() -> None:
     linked = cm_hub_identity()
     if not linked:
         return
-    cm_receipt_notice()
     render_navigation()
+    cm_receipt_notice()
     if st.session_state.cm_page == 'inbox':
         render_receipts()
         return
@@ -3187,8 +3194,31 @@ def cm_password_matches(password, encoded):
         return False
 
 
+def cm_parallel_reads(*readers):
+    """Run independent reads without touching Streamlit state in worker threads."""
+    config = cm_service_config()
+    logs = [[] for _ in readers]
+
+    def read(reader, records):
+        context = _CM_READ_CONTEXT.set((config, records))
+        try:
+            return reader()
+        finally:
+            _CM_READ_CONTEXT.reset(context)
+
+    try:
+        with ThreadPoolExecutor(max_workers=len(readers)) as pool:
+            jobs = [pool.submit(read, reader, records) for reader, records in zip(readers, logs)]
+            return tuple(job.result() for job in jobs)
+    finally:
+        for records in logs:
+            for kind, action, details in records:
+                cm_diag_record(kind, action, **details)
+
+
 def cm_account_request(method, path, payload=None, params=None, prefer=None):
-    url, key = cm_service_config()
+    context = _CM_READ_CONTEXT.get()
+    url, key = context[0] if context is not None else cm_service_config()
     if path.startswith("/rpc/"):
         path = "/rest/v1" + path
     return cm_api_request(url, method, path, key=key, payload=payload, params=params, prefer=prefer)
@@ -4817,28 +4847,31 @@ def cm_analysis_units(catalog, events, stamps, source, profile):
 
 def cm_analysis_load(sources, profile):
     params = {'source_app': 'in.(' + ','.join(sources) + ')'}
-    catalog = cm_plan_rows('chokomana_learning_catalog', {
-        **params, 'entry_type': 'eq.menu', 'select': 'source_app,entry_id,content_version,payload,published_at',
-        'order': 'source_app,published_at.desc.nullslast,entry_id,content_version.desc',
-    })
     owned = {**params, 'profile_id': 'eq.' + profile}
-    events = cm_plan_rows('chokomana_learning_events', {
-        **owned, 'event_type': 'in.(session_started,item_presented,response_submitted,session_ended)',
-        'select': 'event_id,profile_id,source_app,attempt_id,event_type,sequence,occurred_at,occurrence_id,question_id,content_version,payload',
-        'order': 'occurred_at,event_id,source_app',
-    })
-    stamps = cm_plan_rows(TABLE_NAME, {
-        **owned, 'select': 'profile_id,source_app,attempt_id,category_key,category_label,difficulty,'
-                           'correct_count,total_count,grade,finished_at',
-        'order': 'finished_at,attempt_id,source_app',
-    })
+    catalog, events, stamps, states = cm_parallel_reads(
+        lambda: cm_plan_rows('chokomana_learning_catalog', {
+            **params, 'entry_type': 'eq.menu', 'select': 'source_app,entry_id,content_version,payload,published_at',
+            'order': 'source_app,published_at.desc.nullslast,entry_id,content_version.desc',
+        }),
+        lambda: cm_plan_rows('chokomana_learning_events', {
+            **owned, 'event_type': 'in.(session_started,item_presented,response_submitted,session_ended)',
+            'select': 'event_id,profile_id,source_app,attempt_id,event_type,sequence,occurred_at,occurrence_id,question_id,content_version,payload',
+            'order': 'occurred_at,event_id,source_app',
+        }),
+        lambda: cm_plan_rows(TABLE_NAME, {
+            **owned, 'select': 'profile_id,source_app,attempt_id,category_key,category_label,difficulty,'
+                               'correct_count,total_count,grade,finished_at',
+            'order': 'finished_at,attempt_id,source_app',
+        }),
+        lambda: cm_graduation_states(profile),
+    )
     by_source = {source: [[], [], []] for source in sources}
     for index, rows in enumerate((catalog, events, stamps)):
         for row in rows:
             if row['source_app'] not in by_source:
                 raise RuntimeError('analysis source mismatch')
             by_source[row['source_app']][index].append(row)
-    return {source: cm_analysis_units(*by_source[source], source, profile) for source in sources}
+    return {source: cm_analysis_units(*by_source[source], source, profile) for source in sources}, states
 
 
 def cm_analysis_set_unit(source, menu_id, kind, enabled, expected_version):
@@ -5129,6 +5162,20 @@ def render_analysis_priority_rows(rows, saved_by_source, *, kind):
             render_analysis_review_detail(ident, source, entry)
 
 
+CM_ANALYSIS_PAGE_SIZE = 30
+
+
+def cm_analysis_page(visible, page):
+    pages = max(1, (len(visible) + CM_ANALYSIS_PAGE_SIZE - 1) // CM_ANALYSIS_PAGE_SIZE)
+    page = max(1, min(page, pages))
+    start = (page - 1) * CM_ANALYSIS_PAGE_SIZE
+    return page, pages, start
+
+
+def cm_set_analysis_page(page):
+    st.session_state['cm_analysis_page_number'] = page
+
+
 def render_analysis_management():
     st.subheader('分析・管理')
     review_area = st.container()
@@ -5153,9 +5200,12 @@ def render_analysis_management():
         missing = tuple(source for source in SUBJECT_NAMES if source not in cached['apps'])
         if missing:
             with review_area, st.spinner('学習記録を集計しています…'):
-                cached['apps'].update(cm_analysis_load(missing, profile))
+                apps, states = cm_analysis_load(missing, profile)
+            cached['apps'].update(apps)
+            cached['at'] = time.monotonic()
+        else:
+            states = cm_graduation_states(profile)
         st.session_state['cm_analysis_data_v4'] = cached
-        states = cm_graduation_states(profile)
         if any(row['profile_id'] != profile for row in states):
             raise RuntimeError('analysis graduation owner mismatch')
         saved_by_source = {row['source_app']: row.get('items') or {} for row in states}
@@ -5222,6 +5272,23 @@ def render_analysis_management():
         st.info('条件に合う単元はありません。')
         return
 
+    filter_key = (selected, order, status)
+    if st.session_state.get('cm_analysis_pagination_filter') != filter_key:
+        st.session_state['cm_analysis_pagination_filter'] = filter_key
+        st.session_state['cm_analysis_page_number'] = 1
+    page, pages, start = cm_analysis_page(visible, st.session_state.get('cm_analysis_page_number', 1))
+    if pages > 1:
+        previous, count, following = st.columns([1, 3, 1], gap='small', vertical_alignment='center')
+        with previous:
+            cm_button('前へ', key='cm_analysis_prev_page', disabled=page == 1, use_container_width=True,
+                      on_click=cm_set_analysis_page, args=(page - 1,))
+        with count:
+            st.caption(f'{start + 1}〜{min(start + CM_ANALYSIS_PAGE_SIZE, len(visible))}件 / {len(visible)}件（{page}/{pages}ページ）')
+        with following:
+            cm_button('次へ', key='cm_analysis_next_page', disabled=page == pages, use_container_width=True,
+                      on_click=cm_set_analysis_page, args=(page + 1,))
+    page_rows = visible[start:start + CM_ANALYSIS_PAGE_SIZE]
+
     st.markdown('''<style>
     .st-key-cm_analysis_grid [data-testid="stHorizontalBlock"] {
       flex-wrap:nowrap!important; gap:6px!important; min-width:940px;
@@ -5246,7 +5313,7 @@ def render_analysis_management():
     with st.container(height=415, key='cm_analysis_grid'):
         for col, label in zip(st.columns(widths, vertical_alignment='center'), headers):
             col.markdown(f'**{label}**')
-        for (source, key), entry in visible:
+        for (source, key), entry in page_rows:
             cols = st.columns(widths, vertical_alignment='center')
             short, long, count, trend = entry['moving']
             label = entry['label'] if selected != 'all' else f"{entry['label']}（{SUBJECT_NAMES[source]}）"
@@ -5340,16 +5407,18 @@ def cm_daily_progress(payload, profile, today):
     """Refresh today's progress only; never reselect or reorder assigned work."""
     lo=datetime.combine(today,datetime.min.time(),TOKYO)
     hi=lo+timedelta(days=1)
-    events=cm_plan_rows('chokomana_learning_events',{
-        'profile_id':'eq.'+profile,
-        'and':'(occurred_at.gte.'+lo.isoformat()+',occurred_at.lt.'+hi.isoformat()+')',
-        'event_type':'in.(session_started,session_ended,time_interval_closed)',
-        'select':'event_id,profile_id,source_app,attempt_id,content_version,event_type,occurred_at,payload',
-        'order':'occurred_at,event_id'})
-    medals=cm_plan_rows('chokomana_stamps',{
-        'profile_id':'eq.'+profile,'study_date':'eq.'+today.isoformat(),
-        'select':'profile_id,source_app,attempt_id,study_date,grade,stamp_char,category_key,difficulty,finished_at',
-        'order':'finished_at,attempt_id'})
+    events, medals = cm_parallel_reads(
+        lambda: cm_plan_rows('chokomana_learning_events',{
+            'profile_id':'eq.'+profile,
+            'and':'(occurred_at.gte.'+lo.isoformat()+',occurred_at.lt.'+hi.isoformat()+')',
+            'event_type':'in.(session_started,session_ended,time_interval_closed)',
+            'select':'event_id,profile_id,source_app,attempt_id,content_version,event_type,occurred_at,payload',
+            'order':'occurred_at,event_id'}),
+        lambda: cm_plan_rows('chokomana_stamps',{
+            'profile_id':'eq.'+profile,'study_date':'eq.'+today.isoformat(),
+            'select':'profile_id,source_app,attempt_id,study_date,grade,stamp_char,category_key,difficulty,finished_at',
+            'order':'finished_at,attempt_id'}),
+    )
     menus=payload.get('progress_menus') or [
         {**i,'estimated_duration_ms':i['duration_ms']} for i in payload.get('items',[])]
     analysis=cm_medal_progress(cm_plan_analyze(events,menus,profile,today),medals,menus,events,profile,today)
@@ -5393,6 +5462,21 @@ def cm_geography_menu_catalog():
     })
 
 
+def cm_geography_plan_data(profile):
+    try:
+        data = cm_account_request('POST', '/rpc/cm_geography_plan_data_v1', {'p_profile': profile})
+    except RuntimeError as exc:
+        if 'HTTP 404' not in str(exc):
+            raise
+        # Older projects can publish the catalog before installing the planner RPC.
+        return {'catalog': cm_geography_menu_catalog()}
+    if not isinstance(data, dict) or data.get('profile_id') != profile:
+        raise RuntimeError('invalid geography planner data owner')
+    if not all(isinstance(data.get(key), list) for key in ('catalog', 'events', 'medals')):
+        raise RuntimeError('invalid geography planner data')
+    return data
+
+
 def cm_refresh_saved_daily_plan(row, payload, profile, today):
     if payload == row['payload']:
         return payload
@@ -5417,8 +5501,10 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
     now = datetime.now(timezone.utc).isoformat()
     ready = set(allowed_sources) & CM_SOURCE_SUBJECT.keys()
     geography_ready = 'geography' in ready
-    previous = cm_saved_daily_plan(profile, today)
-    graduation_states = cm_graduation_states(profile)
+    previous, graduation_states = cm_parallel_reads(
+        lambda: cm_saved_daily_plan(profile, today),
+        lambda: cm_graduation_states(profile),
+    )
     focus = cm_focused_menus(graduation_states)
     selection_context = {
         'planner_version': CM_PLANNER_VERSION, 'balance': balance, 'ready': sorted(ready),
@@ -5429,34 +5515,28 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
             progress = cm_daily_progress(previous['payload'], profile, today)
             return cm_refresh_saved_daily_plan(previous, progress, profile, today)
 
-    bundle = cm_account_request('POST','/rpc/cm_hub_plan_bundle_v1',{'p_profile':profile})
-    if not isinstance(bundle,dict) or bundle.get('profile_id') != profile:
+    def load_bundle():
+        return cm_account_request('POST', '/rpc/cm_hub_plan_bundle_v1', {'p_profile': profile})
+
+    if geography_ready:
+        bundle, geography = cm_parallel_reads(load_bundle, lambda: cm_geography_plan_data(profile))
+    else:
+        bundle, geography = load_bundle(), None
+    if not isinstance(bundle, dict) or bundle.get('profile_id') != profile:
         raise RuntimeError('invalid planner bundle owner')
     catalog = bundle.get('catalog')
     events = bundle.get('events')
     all_medals = bundle.get('medals')
-    if not all(isinstance(v,list) for v in (catalog,events,all_medals)):
+    if not all(isinstance(value, list) for value in (catalog, events, all_medals)):
         raise RuntimeError('invalid planner bundle')
     previous = bundle.get('previous') or previous
-    if geography_ready:
-        try:
-            geography = cm_account_request('POST', '/rpc/cm_geography_plan_data_v1', {'p_profile':profile})
-        except RuntimeError as exc:
-            if "HTTP 404" not in str(exc):
-                raise
-            # Older projects can publish the catalog before installing the planner RPC.
-            # Keep any geography history already supplied by the hub bundle.
-            geography_catalog = cm_geography_menu_catalog()
-            if geography_catalog:
-                catalog = [row for row in catalog if row.get('source_app')!='geography'] + geography_catalog
-        else:
-            if not isinstance(geography,dict) or geography.get('profile_id')!=profile:
-                raise RuntimeError('invalid geography planner data owner')
-            if not all(isinstance(geography.get(key),list) for key in ('catalog','events','medals')):
-                raise RuntimeError('invalid geography planner data')
-            catalog = [row for row in catalog if row.get('source_app')!='geography'] + geography['catalog']
-            events = [row for row in events if row.get('source_app')!='geography'] + geography['events']
-            all_medals = [row for row in all_medals if row.get('source_app')!='geography'] + geography['medals']
+    if geography:
+        has_history = 'events' in geography
+        if has_history or geography['catalog']:
+            catalog = [row for row in catalog if row.get('source_app') != 'geography'] + geography['catalog']
+        if has_history:
+            events = [row for row in events if row.get('source_app') != 'geography'] + geography['events']
+            all_medals = [row for row in all_medals if row.get('source_app') != 'geography'] + geography['medals']
     menus = cm_plan_menus(catalog, age)
     graduated = cm_graduated_menus(menus, graduation_states)
     stamps = [row for row in all_medals if row.get('study_date') == today.isoformat()]
@@ -5629,7 +5709,7 @@ def cm_plan_items_html(items, links=None):
 
 
 CM_PLAN_RETURN_BRIDGE = r"""<!doctype html><html><meta charset="utf-8"><script>
-let retryTimer, lastHint, lastVisible = -Infinity;
+let retryTimer, lastHint, lastVisible = -Infinity, launched = false;
 function notify(reason) {
  const id = crypto.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2);
  parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',
@@ -5642,18 +5722,25 @@ try {
   clearTimeout(retryTimer);
   retryTimer = setTimeout(() => { if (isVisible()) notify('return_retry'); }, 3000);
  }
+ function onLaunch(event) {
+  if (event.target?.closest?.('a.cm-subject, a.cm-plan-launch')) launched = true;
+ }
  function onVisible() {
   if (!isVisible()) { clearTimeout(retryTimer); return; }
+  if (!launched) return;
   const now = performance.now();
   if (now - lastVisible < 750) return;
   lastVisible = now;
+  launched = false;
   notify('tab_visible');
   retry();
  }
  parent.__cmPlanReturnCleanup?.();
  doc.addEventListener('visibilitychange', onVisible);
+ doc.addEventListener('click', onLaunch, true);
  parent.__cmPlanReturnCleanup = () => {
   doc.removeEventListener('visibilitychange', onVisible);
+  doc.removeEventListener('click', onLaunch, true);
   clearTimeout(retryTimer);
  };
  window.addEventListener('message', event => {
@@ -5741,7 +5828,9 @@ def render_daily_plan(apps, return_event=None):
         cache_matches = cached is not None and cached['key'] == cache_key
         if refresh or return_event or not cache_matches or time.time()-cached['at']>=30:
             try:
-                with nullcontext() if cache_matches else st.spinner('今日のリストを読み込んでいます…'):
+                feedback = (st.spinner('達成状況を更新しています…') if refresh or return_event
+                            else nullcontext() if cache_matches else st.spinner('今日のリストを読み込んでいます…'))
+                with feedback:
                     payload = cm_load_daily_plan(age, balance, ready_sources, excluded_sources=excluded, refresh=refresh)
                 cached = {'key':cache_key,'at':time.time(),'payload':payload}
                 st.session_state['cm_plan_snapshot']=cached
