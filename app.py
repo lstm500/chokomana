@@ -2475,6 +2475,7 @@ def cm_prepare_launch_links(apps):
     if not profile:
         raise RuntimeError('利用者の連携を準備しています')
     now = datetime.now(timezone.utc)
+    retry_paused = time.monotonic() < st.session_state.get('cm_link_retry_at', 0)
     links, pending, payload, seen = {}, {}, [], set()
     for app in apps:
         source = app['id']
@@ -2487,6 +2488,8 @@ def cm_prepare_launch_links(apps):
         if (cache and cache.get('profile')==profile and cache.get('url')==app['url']
                 and cache['expiry']>now+timedelta(seconds=70)):
             links[source] = cache['link']
+            continue
+        if retry_paused:
             continue
         code = secrets.token_urlsafe(32)
         expiry = now+timedelta(seconds=CM_TICKET_SECONDS)
@@ -2502,12 +2505,16 @@ def cm_prepare_launch_links(apps):
         except RuntimeError as exc:
             # An older shared schema can reject geography tickets before its migration.
             if "geography" not in pending or "HTTP 400" not in str(exc):
+                if isinstance(exc, CMAPIError) and exc.retryable:
+                    st.session_state['cm_link_retry_at'] = time.monotonic() + 60
+                    return links
                 raise
             pending.pop("geography")
             other_tickets = [ticket for ticket in payload if ticket["source_app"] != "geography"]
             if other_tickets:
                 cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,
                                payload=other_tickets,prefer='return=minimal')
+        st.session_state.pop('cm_link_retry_at', None)
         for source, cache in pending.items():
             st.session_state['cm_link_'+source] = cache
             links[source] = cache['link']
@@ -2716,10 +2723,13 @@ def render_home(apps: list[dict]) -> None:
                 st.rerun()
     @st.fragment(run_every=60)
     def launch_cards():
+        if st.session_state.get('cm_link_retry_at'):
+            cm_button('起動リンクを再確認', key='cm_retry_launch_links', on_click=st.session_state.pop,
+                      args=('cm_link_retry_at', None))
         st.markdown(home_cards_html(apps), unsafe_allow_html=True)
         cm_diag_mark_ready()
     launch_cards()
-    @st.fragment(run_every=30)
+    @st.fragment(run_every=120)
     def daily_assignments():
         try:
             event = cm_plan_return_event()
@@ -3617,7 +3627,7 @@ def render_settings():
 def cm_clear_account_state():
     for key in list(st.session_state):
         if key.startswith(("cm_link_", "cm_today_", "cm_history_", "cm_plan_", "cm_email_", "cm_audio_", "cm_medal_volume_", "cm_support_", "cm_show_", "cm_receipt_", "cm_train_", "cm_analysis_")) or key in (
-            "cm_profile", "cm_account_token", "cm_account_username", "cm_hub_validated_token",
+            "cm_profile", "cm_account_token", "cm_account_username", "cm_hub_validated_token", "cm_account_restore_error",
             "cm_change_current", "cm_change_new", "cm_change_confirmation", "cm_password_changed"):
             st.session_state.pop(key, None)
     st.session_state.cm_page = "home"
@@ -3930,12 +3940,20 @@ def cm_hub_identity():
         token = st.session_state.get("cm_account_token")
     account = None
     if token:
-        try:
-            account = cm_restore_account(token)
-        except RuntimeError as exc:
-            cm_error("保存済みのログインを確認できませんでした。" + cm_account_error_text(exc))
-            if cm_button("再試行", key="cm_account_retry"):
-                st.rerun()
+        token_hash = hashlib.sha256(str(token).encode()).hexdigest()
+        failure = st.session_state.get("cm_account_restore_error")
+        if not failure or failure[0] != token_hash:
+            st.session_state.pop("cm_account_restore_error", None)
+            try:
+                account = cm_restore_account(token)
+                failure = None
+            except RuntimeError as exc:
+                failure = (token_hash, cm_account_error_text(exc))
+                st.session_state["cm_account_restore_error"] = failure
+        if failure:
+            cm_error("保存済みのログインを確認できませんでした。" + failure[1])
+            cm_button("再試行", key="cm_account_retry", on_click=st.session_state.pop,
+                      args=("cm_account_restore_error", None))
             if cm_button("ログインし直す", key="cm_account_open_login"):
                 cm_clear_account_state()
                 st.session_state["cm_account_manual_login"] = True
@@ -4093,7 +4111,7 @@ def cm_plan_settings(*, refresh=False):
     profile = st.session_state['cm_profile']
     cache = st.session_state.get('cm_plan_settings')
     if (not refresh and cache and cache['profile'] == profile
-            and cache.get('day') == now_jst().date().isoformat() and time.time() - cache['at'] < 30):
+            and cache.get('day') == now_jst().date().isoformat() and time.time() - cache['at'] < 120):
         return cache['age']
     rows = cm_account_request('GET', '/rest/v1/chokomana_learner_settings', params={
         'profile_id': 'eq.' + profile, 'select': 'age', 'limit': '1'})
@@ -4141,7 +4159,7 @@ def cm_cache_plan_balance(rows, profile, *, available=True, can_exclude=True):
 def cm_plan_balance(*, refresh=False):
     profile = st.session_state['cm_profile']
     cached = st.session_state.get('cm_plan_balance')
-    if not refresh and cached and cached['profile'] == profile and time.monotonic() - cached['at'] < 30:
+    if not refresh and cached and cached['profile'] == profile and time.monotonic() - cached['at'] < 120:
         return cached
     params = {'profile_id': 'eq.' + profile, 'select': 'profile_id,' + ','.join(CM_SCHOOL_SUBJECTS), 'limit': '1'}
     try:
@@ -4913,6 +4931,7 @@ def cm_reconcile_plan(items, events, stamps, profile, day, generated_at):
 def cm_plan_launch_links(items, apps):
     import secrets
     profile=st.session_state['cm_profile']; now=datetime.now(timezone.utc)
+    retry_paused = time.monotonic() < st.session_state.get('cm_link_retry_at', 0)
     app_map={a['id']:a for a in apps if a.get('ready')}
     links={}; pending={}; payload=[]
     for item in items:
@@ -4922,6 +4941,8 @@ def cm_plan_launch_links(items, apps):
         key='cm_link_plan_'+item['plan_item_id']; cached=st.session_state.get(key)
         if cached and cached.get('profile')==profile and cached.get('url')==app['url'] and cached.get('completion_revision')==revision and cached['expiry']>now+timedelta(seconds=70):
             links[item['plan_item_id']]=cached['link'];continue
+        if retry_paused:
+            continue
         code=secrets.token_urlsafe(32);expiry=now+timedelta(seconds=CM_TICKET_SECONDS)
         cm_diag_record('launch','ticket_issued',trace_id=hashlib.sha256(code.encode()).hexdigest()[:16],menu_id=item['menu_id'],stage=item['source_app'])
         modes=item.get('mode_options') or ['challenge']; mode='challenge' if 'challenge' in modes else 'learn'
@@ -4931,7 +4952,14 @@ def cm_plan_launch_links(items, apps):
         pending[item['plan_item_id']]={'key':key,'profile':profile,'url':app['url'],'expiry':expiry,'completion_revision':revision,'link':cm_launch_url(app['url'],code)}
     if payload:
         url,key=cm_service_config()
-        cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,payload=payload,prefer='return=minimal')
+        try:
+            cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,payload=payload,prefer='return=minimal')
+        except CMAPIError as exc:
+            if not exc.retryable:
+                raise
+            st.session_state['cm_link_retry_at'] = time.monotonic() + 60
+            return links
+        st.session_state.pop('cm_link_retry_at', None)
         for ident,cache in pending.items():
             st.session_state[cache['key']]=cache;links[ident]=cache['link']
     return links
@@ -5664,20 +5692,7 @@ def cm_plan_result_fingerprint(events, medals, today):
 
 def cm_daily_progress(payload, profile, today):
     """Refresh today's progress only; never reselect or reorder assigned work."""
-    lo=datetime.combine(today,datetime.min.time(),TOKYO)
-    hi=lo+timedelta(days=1)
-    events, medals = cm_parallel_reads(
-        lambda: cm_plan_rows('chokomana_learning_events',{
-            'profile_id':'eq.'+profile,
-            'and':'(occurred_at.gte.'+lo.isoformat()+',occurred_at.lt.'+hi.isoformat()+')',
-            'event_type':'in.(session_started,session_ended,time_interval_closed)',
-            'select':'event_id,profile_id,source_app,attempt_id,content_version,event_type,occurred_at,payload',
-            'order':'occurred_at,event_id'}),
-        lambda: cm_plan_rows('chokomana_stamps',{
-            'profile_id':'eq.'+profile,'study_date':'eq.'+today.isoformat(),
-            'select':'profile_id,source_app,attempt_id,study_date,grade,stamp_char,category_key,difficulty,finished_at',
-            'order':'finished_at,attempt_id'}),
-    )
+    events, medals = cm_daily_progress_rows(profile, today)
     menus=payload.get('progress_menus') or [
         {**i,'estimated_duration_ms':i['duration_ms']} for i in payload.get('items',[])]
     analysis=cm_medal_progress(cm_plan_analyze(events,menus,profile,today),medals,menus,events,profile,today)
@@ -5697,6 +5712,39 @@ def cm_daily_progress(payload, profile, today):
         'missing_time':analysis['missing_time'],'partial_time':analysis['partial_time'],
         'remaining_ms':remaining,'planned_ms':planned,'reached':reached,
         'sufficient':reached or planned>=remaining*.95}
+
+
+def cm_daily_progress_rows(profile, today):
+    # Older deployments can continue reading the same data through paginated REST.
+    rpc_retry_at = st.session_state.get('cm_plan_progress_rpc_retry_at', 0)
+    if time.monotonic() >= rpc_retry_at:
+        try:
+            rows = cm_account_request('POST', '/rpc/cm_hub_daily_progress_v1',
+                                      {'p_profile': profile, 'p_day': today.isoformat()})
+        except CMAPIError as exc:
+            if exc.http_status != 404 or exc.provider_code not in ('PGRST202', '42883'):
+                raise
+            st.session_state['cm_plan_progress_rpc_retry_at'] = time.monotonic() + 600
+        else:
+            if (not isinstance(rows, dict) or rows.get('profile_id') != profile
+                    or rows.get('study_date') != today.isoformat()
+                    or not all(isinstance(rows.get(key), list) for key in ('events', 'medals'))):
+                raise RuntimeError('invalid daily progress response')
+            return rows['events'], rows['medals']
+    lo=datetime.combine(today,datetime.min.time(),TOKYO)
+    hi=lo+timedelta(days=1)
+    return cm_parallel_reads(
+        lambda: cm_plan_rows('chokomana_learning_events',{
+            'profile_id':'eq.'+profile,
+            'and':'(occurred_at.gte.'+lo.isoformat()+',occurred_at.lt.'+hi.isoformat()+')',
+            'event_type':'in.(session_started,session_ended,time_interval_closed)',
+            'select':'event_id,profile_id,source_app,attempt_id,content_version,event_type,occurred_at,payload',
+            'order':'occurred_at,event_id'}),
+        lambda: cm_plan_rows('chokomana_stamps',{
+            'profile_id':'eq.'+profile,'study_date':'eq.'+today.isoformat(),
+            'select':'profile_id,source_app,attempt_id,study_date,grade,stamp_char,category_key,difficulty,finished_at',
+            'order':'finished_at,attempt_id'}),
+    )
 
 
 def cm_saved_daily_plan(profile,today):
@@ -6061,11 +6109,35 @@ def render_daily_plan(apps, return_event=None):
             title_col,refresh_col=st.columns([3,1],gap='small')
             with title_col:st.markdown('### きょう やること')
             with refresh_col:refresh=cm_button('更新',key='cm_plan_refresh',use_container_width=True)
-        try:
-            age = cm_plan_settings(refresh=refresh)
-        except RuntimeError:
-            cm_error('学習設定を読み込めませんでした。')
+        if refresh:
+            st.session_state.pop('cm_link_retry_at', None)
+        profile, day = st.session_state['cm_profile'], now_jst().date()
+        retry_scope = (profile, day)
+        paused = st.session_state.get('cm_plan_refresh_backoff') == retry_scope
+        automatic_paused = paused and not refresh and time.monotonic() < st.session_state.get('cm_plan_retry_at', 0)
+        cached = st.session_state.get('cm_plan_snapshot')
+        if automatic_paused and (not cached or cached['key'][:2] != (profile, day.isoformat())):
+            st.caption('同期を休止しています。「更新」で再試行できます。')
             return
+        if automatic_paused:
+            age = cached['key'][2]
+            balance, excluded = dict(cached['key'][3]), frozenset(cached['key'][5])
+        else:
+            try:
+                age = cm_plan_settings(refresh=refresh)
+                if age is not None:
+                    settings = cm_plan_balance(refresh=refresh)
+                    balance, excluded = settings['values'], settings['excluded']
+            except (RuntimeError, ValueError) as exc:
+                cm_diag_record('operation', 'cm_plan_settings_load', status='error', error=exc)
+                st.session_state['cm_plan_refresh_backoff'] = retry_scope
+                st.session_state['cm_plan_retry_at'] = time.monotonic() + 240
+                if not cached or cached['key'][:2] != (profile, day.isoformat()):
+                    cm_error('学習設定を読み込めませんでした。「更新」で再試行できます。')
+                    return
+                age = cached['key'][2]
+                balance, excluded = dict(cached['key'][3]), frozenset(cached['key'][5])
+                automatic_paused = True
         if age is None:
             st.info('年齢を設定すると、今日やる学習を自動で選びます。')
             if manager_url := cm_mimamori_url():
@@ -6073,19 +6145,14 @@ def render_daily_plan(apps, return_event=None):
             else:
                 render_plan_age()
             return
-        cached = st.session_state.get('cm_plan_snapshot')
         ready_sources={a['id'] for a in apps if a['ready']}
-        try:
-            settings = cm_plan_balance(refresh=refresh)
-        except (RuntimeError, ValueError):
-            cm_error('教科配分を読み込めませんでした。「更新」で再試行してください。')
-            return
-        balance, excluded = settings['values'], settings['excluded']
-        profile, day = st.session_state['cm_profile'], now_jst().date()
         cache_key = (profile, day.isoformat(), age,
                      tuple(balance.items()), tuple(sorted(ready_sources)), tuple(sorted(excluded)))
         cache_matches = cached is not None and cached['key'] == cache_key
-        if refresh or return_event or not cache_matches or time.time()-cached['at']>=30:
+        if automatic_paused and not cache_matches:
+            st.caption('同期を休止しています。「更新」で再試行できます。')
+            return
+        if not automatic_paused and (refresh or return_event or not cache_matches or time.time()-cached['at']>=120):
             try:
                 feedback = (st.spinner('達成状況を更新しています…') if refresh or return_event
                             else nullcontext() if cache_matches else st.spinner('今日のリストを読み込んでいます…'))
@@ -6093,13 +6160,19 @@ def render_daily_plan(apps, return_event=None):
                     payload = cm_load_daily_plan(age, balance, ready_sources, excluded_sources=excluded, refresh=refresh)
                 cached = {'key':cache_key,'at':time.time(),'payload':payload}
                 st.session_state['cm_plan_snapshot']=cached
+                st.session_state.pop('cm_plan_refresh_backoff', None)
+                st.session_state.pop('cm_plan_retry_at', None)
             except (RuntimeError,ValueError,KeyError,TypeError) as exc:
                 cm_diag_record('operation','cm_plan_return_refresh' if return_event else 'cm_plan_load',
                                status='error',error=exc,
                                trace_id=return_event['id'] if return_event else None,
                                stage=return_event['reason'] if return_event else None)
+                st.session_state['cm_plan_refresh_backoff'] = retry_scope
+                st.session_state['cm_plan_retry_at'] = time.monotonic() + 240
                 if not cache_matches:
-                    payload = cm_plan_display_fallback(profile, day, age, balance, excluded, ready_sources)
+                    payload = None
+                    if not (isinstance(exc, CMAPIError) and exc.retryable):
+                        payload = cm_plan_display_fallback(profile, day, age, balance, excluded, ready_sources)
                     if payload is None:
                         cm_error('今日のリストを読み込めませんでした。「更新」で再試行してください。')
                         return
@@ -6107,7 +6180,7 @@ def render_daily_plan(apps, return_event=None):
                     st.session_state['cm_plan_snapshot'] = cached
                 cached['at']=time.time()
                 cached['sync_error']=True
-        if cached.get('sync_error'):
+        if automatic_paused or cached.get('sync_error'):
             st.caption('同期できないため、前回の達成状況を表示しています。「更新」で再試行できます。')
         p = cached['payload']
         age=p['age']
