@@ -348,7 +348,7 @@ def cm_diag_bridge(show_download=False):
         server_records=snapshot, server_dropped=d['dropped'], controls=d['controls'],
         show_download=settings, page=cm_diag_page(),
         app_version='49', default=None)
-    if not settings and st.session_state.get('cm_profile'):
+    if not settings and st.session_state.get('cm_account_verified'):
         cm_kotoba_audio_bridge()
 
 
@@ -3135,6 +3135,13 @@ def cm_secret(name, default=''):
     return str(value or '').strip()
 
 
+class CMAPIError(RuntimeError):
+    def __init__(self, message, *, http_status=None, retryable=False):
+        super().__init__(message)
+        self.http_status = http_status
+        self.retryable = retryable
+
+
 def cm_api_request(url, method, path, *, key, token=None, payload=None, params=None, timeout=8, prefer=None):
     from urllib.parse import urlencode
     base = url.rstrip('/') + path
@@ -3155,10 +3162,14 @@ def cm_api_request(url, method, path, *, key, token=None, payload=None, params=N
             return json.loads(raw) if raw else None
     except HTTPError as e:
         cm_diag_http_error(e, 'cm_api_request')
-        raise RuntimeError(f'通信に失敗しました（HTTP {e.code}）') from None
-    except (URLError,TimeoutError,OSError) as exc:
+        raise CMAPIError(f'通信に失敗しました（HTTP {e.code}）', http_status=e.code,
+                         retryable=e.code in (408, 500, 502, 503, 504)) from None
+    except (URLError, TimeoutError, OSError) as exc:
         cm_diag_record('network_error','cm_api_request',status='error',error=exc)
-        raise RuntimeError('接続を確認してください') from None
+        raise CMAPIError('接続を確認してください', retryable=True) from None
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        cm_diag_record('network_error','cm_api_request',status='error',error=exc)
+        raise CMAPIError('サーバーの応答を確認できません', retryable=True) from None
 
 
 def cm_validate_guest(access_token):
@@ -3343,12 +3354,12 @@ def cm_parallel_reads(*readers):
                 cm_diag_record(kind, action, **details)
 
 
-def cm_account_request(method, path, payload=None, params=None, prefer=None):
+def cm_account_request(method, path, payload=None, params=None, prefer=None, *, timeout=8):
     context = _CM_READ_CONTEXT.get()
     url, key = context[0] if context is not None else cm_service_config()
     if path.startswith("/rpc/"):
         path = "/rest/v1" + path
-    return cm_api_request(url, method, path, key=key, payload=payload, params=params, prefer=prefer)
+    return cm_api_request(url, method, path, key=key, payload=payload, params=params, prefer=prefer, timeout=timeout)
 
 
 def cm_account_gate(username):
@@ -3407,22 +3418,42 @@ def cm_login_account(username, password):
     return cm_account_new_session(account["profile_id"], account["username"], bucket)
 
 
+def cm_read_account_row(table, params):
+    path = "/rest/v1/" + table
+    try:
+        rows = cm_account_request("GET", path, params=params, timeout=5)
+    except CMAPIError as exc:
+        if not exc.retryable:
+            raise
+        rows = cm_account_request("GET", path, params=params)
+    if rows == []:
+        return None
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise RuntimeError("ログイン確認の応答形式が不正です。")
+    return rows[0]
+
+
 def cm_restore_account(token):
     if not isinstance(token, str) or not re.fullmatch(r"[a-f0-9]{64}", token):
         return None
     token_hash = hashlib.sha256(token.encode()).hexdigest()
-    rows = cm_account_request("GET", "/rest/v1/chokomana_account_sessions", params={
+    session = cm_read_account_row("chokomana_account_sessions", {
         "token_hash": "eq." + token_hash, "expires_at": "gt." + datetime.now(timezone.utc).isoformat(),
         "select": "profile_id", "limit": "1",
     })
-    if not isinstance(rows, list) or len(rows) != 1:
+    if session is None:
         return None
-    account = cm_account_request("GET", "/rest/v1/chokomana_accounts", params={
-        "profile_id": "eq." + str(rows[0]["profile_id"]), "select": "username,profile_id", "limit": "1",
+    profile = session.get("profile_id")
+    if not isinstance(profile, str) or not profile:
+        raise RuntimeError("ログイン確認の応答形式が不正です。")
+    account = cm_read_account_row("chokomana_accounts", {
+        "profile_id": "eq." + profile, "select": "username,profile_id", "limit": "1",
     })
-    if not isinstance(account, list) or len(account) != 1:
+    if account is None:
         return None
-    return {**account[0], "token": token}
+    if account.get("profile_id") != profile or not isinstance(account.get("username"), str):
+        raise RuntimeError("ログイン確認の応答形式が不正です。")
+    return {**account, "token": token}
 
 
 def cm_change_password(current_password, new_password, confirmation):
@@ -3768,6 +3799,7 @@ def cm_account_form(legacy_token):
                     account = (cm_register_account(username, password, confirmation, legacy_token)
                                if signup else cm_login_account(username, password))
                 cm_set_account(account)
+                st.session_state.pop("cm_account_manual_login", None)
                 cm_queue_account_command(account["token"])
                 if signup and recovery_email:
                     try:
@@ -3788,6 +3820,7 @@ def cm_account_form(legacy_token):
 
 
 def cm_hub_identity():
+    st.session_state["cm_account_verified"] = False
     command = st.session_state.get("cm_account_command")
     event = cm_auth_component(cm_hub_device_html())(key="cm_account_browser", command=command, default=None)
     if not event and not command:
@@ -3795,6 +3828,12 @@ def cm_hub_identity():
         return False
     if not isinstance(event, dict):
         event = {}
+    if st.session_state.get("cm_account_manual_login"):
+        if cm_button("保存済みのログインを再確認", key="cm_account_resume_saved"):
+            st.session_state.pop("cm_account_manual_login", None)
+            st.rerun()
+        cm_account_form(event.get("legacy_device_token"))
+        return False
     saved_speed = event.get('speech_speed')
     if saved_speed in ('0', '1', '2', '3', '4'):
         st.session_state.setdefault('cm_speech_speed', int(saved_speed))
@@ -3811,20 +3850,29 @@ def cm_hub_identity():
     if token:
         try:
             account = cm_restore_account(token)
-        except RuntimeError:
-            cm_error("ログイン状態を確認できませんでした。もう一度お試しください。")
+        except RuntimeError as exc:
+            http_status = getattr(exc, "http_status", None)
+            detail = f"（HTTP {http_status}）" if http_status else ""
+            cm_error("保存済みのログインを確認できませんでした。" + detail)
             if cm_button("再試行", key="cm_account_retry"):
+                st.rerun()
+            if cm_button("ログインし直す", key="cm_account_open_login"):
+                cm_clear_account_state()
+                st.session_state["cm_account_manual_login"] = True
+                st.session_state["cm_account_mode"] = "ログイン"
                 st.rerun()
             return False
         if not account:
             cm_clear_account_state()
             cm_queue_account_command(None)
+            st.session_state["cm_account_mode"] = "ログイン"
             st.info("ログインの有効期限が切れました。もう一度ログインしてください。")
     if not account:
         cm_clear_account_state()
         cm_account_form(event.get("legacy_device_token"))
         return False
     cm_set_account(account)
+    st.session_state["cm_account_verified"] = True
     if st.session_state.pop("cm_account_clear_fields", False):
         for k in ("cm_login_password", "cm_signup_password", "cm_signup_confirmation", "cm_signup_recovery_email"):
             st.session_state.pop(k, None)
