@@ -4073,7 +4073,7 @@ CM_SOROBAN_CHALLENGE_MENUS = frozenset('soroban:calculation:'+mode for mode in (
     'mm1','mm2','mm3','md1','md2','md3','a1','a2','a3'))
 CM_SOROBAN_KUKU_MENUS = frozenset('soroban:kuku:'+str(level) for level in range(1,6))
 CM_SOROBAN_KUKU_PREREQUISITES = ('soroban:calculation:ba1','soroban:calculation:ba2','soroban:calculation:bs1')
-CM_PLANNER_VERSION = 'adaptive-12-kotoba-time'
+CM_PLANNER_VERSION = 'adaptive-13-japanese-minimum'
 
 
 def cm_daily_menu_allowed(menu, kuku_ready=False):
@@ -4738,6 +4738,12 @@ def cm_medal_candidate(candidate, analysis):
     return candidate
 
 
+def cm_plan_unit_ms(source, estimate_ms):
+    if CM_SOURCE_SUBJECT.get(source) == 'japanese':
+        return max(180_000, estimate_ms)
+    return estimate_ms
+
+
 def cm_plan_candidates(menus, analysis, today, focus=()):
     from collections import defaultdict
     groups = defaultdict(list); stats = analysis['stats']; candidates = []
@@ -4800,7 +4806,7 @@ def cm_plan_candidates(menus, analysis, today, focus=()):
             duration = estimate['ms'] if measured else m['estimated_duration_ms']
             if duration<=0:
                 continue
-            candidates.append({**m, 'duration_ms':int(duration), 'duration_basis':'measured' if measured else 'provisional',
+            candidates.append({**m, 'duration_ms':int(cm_plan_unit_ms(m['source_app'], duration)), 'duration_basis':'measured' if measured else 'provisional',
                 'kotoba_timing':estimate if measured and m['source_app']=='kotoba' else None,
                 'reason':reason, 'score':score, 'key':key(m), 'accuracy':ss.get('accuracy')})
     candidates.extend(cm_english_candidates(menus, analysis, today, focus))
@@ -5756,7 +5762,7 @@ def cm_daily_progress(payload, profile, today):
     """Refresh today's progress only; never reselect or reorder assigned work."""
     events, medals = cm_daily_progress_rows(profile, today)
     menus=payload.get('progress_menus') or [
-        {**i,'estimated_duration_ms':i['duration_ms']} for i in payload.get('items',[])]
+        {**i,'estimated_duration_ms':i.get('estimated_duration_ms',i['duration_ms']) if CM_SOURCE_SUBJECT.get(i['source_app'])=='japanese' else i['duration_ms']} for i in payload.get('items',[])]
     analysis=cm_medal_progress(cm_plan_analyze(events,menus,profile,today),medals,menus,events,profile,today)
     items=cm_reconcile_plan(payload.get('items',[]),events,medals,profile,today,payload['generated_at'])
     excluded = set(payload.get('selection_context', {}).get('excluded_sources', []))
@@ -5961,6 +5967,7 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
                     item[field] = current[key][field]
         elif not item['focused'] and item['reason'] == '重点単元の練習':
             item['reason'] = '単元の練習'
+        item['duration_ms'] = cm_plan_unit_ms(key[0], item['duration_ms'])
         items[key] = item
         if key[0] in enabled_sources:
             counts[key] = item['repetitions']
@@ -6055,7 +6062,9 @@ def cm_plan_items_html(items, links=None):
         timing = item.get('kotoba_timing') or {}
         if timing.get('timing_label'):
             basis = (f"{timing['timing_label']} · 1問あたり約{timing['per_question_ms']/1000:.1f}秒"
-                     f" · 1回{timing['question_count']}問で約{item['duration_ms']/60000:.1f}分")
+                     f" · 1回{timing['question_count']}問で約{timing['ms']/60000:.1f}分")
+        if CM_SOURCE_SUBJECT.get(item['source_app']) == 'japanese':
+            basis += ' · 計画では1回最低3分'
         medals=''.join('<span class="cm-plan-medal cm-plan-medal-'+html.escape(m['grade'])+'" aria-label="'+GRADE_NAMES[m['grade']]+'メダル">'+GRADE_NAMES[m['grade']]+'</span>' for m in item.get('medals',[]))
         retry=total>0 and count>=total
         badge='<span class="cm-plan-finished" role="status">🌸 達成済み</span>' if done else ''
