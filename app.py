@@ -4073,7 +4073,7 @@ CM_SOROBAN_CHALLENGE_MENUS = frozenset('soroban:calculation:'+mode for mode in (
     'mm1','mm2','mm3','md1','md2','md3','a1','a2','a3'))
 CM_SOROBAN_KUKU_MENUS = frozenset('soroban:kuku:'+str(level) for level in range(1,6))
 CM_SOROBAN_KUKU_PREREQUISITES = ('soroban:calculation:ba1','soroban:calculation:ba2','soroban:calculation:bs1')
-CM_PLANNER_VERSION = 'adaptive-13-japanese-minimum'
+CM_PLANNER_VERSION = 'adaptive-14-unit-elapsed'
 
 
 def cm_daily_menu_allowed(menu, kuku_ready=False):
@@ -4477,6 +4477,35 @@ def cm_kotoba_times(rows, menus, starts, ends, items, spans, unknown, reloaded):
     return result
 
 
+def cm_unit_measurements(starts, ends, menus):
+    from collections import defaultdict
+    from statistics import median
+    samples = defaultdict(list)
+    for aid, end in ends.items():
+        start = starts.get(aid)
+        p = end['payload']
+        if not start or p.get('status') != 'completed':
+            continue
+        first = cm_plan_date(p.get('first_question_at'))
+        last = cm_plan_date(p.get('last_question_finished_at'))
+        ms = p.get('unit_elapsed_ms')
+        if not first or not last or type(ms) != int or ms <= 0 or abs((last-first).total_seconds()*1000-ms) > 2:
+            continue
+        sp = start['payload']
+        key = (start['source_app'], sp.get('menu_id'), start['content_version'])
+        samples[key, sp.get('planned_question_count')].append((end['occurred_at'], ms))
+    result = {}
+    for menu in menus:
+        key = (menu['source_app'], menu['menu_id'], menu['content_version'])
+        count = menu.get('question_count_default') or menu.get('planned_question_count')
+        recent = sorted(samples.get((key,count), []))[-10:]
+        if recent and count:
+            ms = round(median(t for _, t in recent))
+            result[key] = dict(ms=ms, question_count=count, count=len(recent), per_question_ms=round(ms/count),
+                               timing_label='1問目の表示から最終問題の終了まで')
+    return result
+
+
 def cm_plan_analyze(events, menus, profile, today):
     """First scored submissions only; app support/retries never count as unaided mastery."""
     from collections import defaultdict
@@ -4587,6 +4616,7 @@ def cm_plan_analyze(events, menus, profile, today):
         if len(recent) >= 3:
             durations[key] = {'ms': round(median(x[1] for x in recent)), 'count': len(recent), 'question_count': recent[0][2]}
     durations.update(cm_kotoba_times(rows, menus, starts, ends, items, spans, unknown, reloaded))
+    durations.update(cm_unit_measurements(starts, ends, menus))
     lo = datetime.combine(today, datetime.min.time(), TOKYO)
     hi = lo + timedelta(days=1)
     daily_spans = [(max(a,lo), min(b,hi)) for ss in spans.values() for a,b in ss if b>lo and a<hi]
@@ -4802,7 +4832,7 @@ def cm_plan_candidates(menus, analysis, today, focus=()):
             if m['source_app']=='moji':
                 reason,score='文字を書く練習',70
             estimate = analysis['durations'].get(key(m))
-            measured = estimate and estimate['question_count']==m.get('question_count_default')
+            measured = estimate and estimate['question_count']==(m.get('question_count_default') or m.get('planned_question_count'))
             duration = estimate['ms'] if measured else m['estimated_duration_ms']
             if duration<=0:
                 continue
@@ -5962,9 +5992,9 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
         item['focused'] = key[:2] in focus and key[:2] not in graduated
         if key in current:
             item['reason'] = current[key]['reason']
-            if key[0] == 'kotoba':
+            if current[key].get('duration_basis') == 'measured' or key[0] == 'kotoba':
                 for field in ('duration_ms', 'duration_basis', 'kotoba_timing'):
-                    item[field] = current[key][field]
+                    item[field] = current[key].get(field)
         elif not item['focused'] and item['reason'] == '重点単元の練習':
             item['reason'] = '単元の練習'
         item['duration_ms'] = cm_plan_unit_ms(key[0], item['duration_ms'])
