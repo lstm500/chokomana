@@ -4073,7 +4073,7 @@ CM_SOROBAN_CHALLENGE_MENUS = frozenset('soroban:calculation:'+mode for mode in (
     'mm1','mm2','mm3','md1','md2','md3','a1','a2','a3'))
 CM_SOROBAN_KUKU_MENUS = frozenset('soroban:kuku:'+str(level) for level in range(1,6))
 CM_SOROBAN_KUKU_PREREQUISITES = ('soroban:calculation:ba1','soroban:calculation:ba2','soroban:calculation:bs1')
-CM_PLANNER_VERSION = 'adaptive-11-daily-coverage'
+CM_PLANNER_VERSION = 'adaptive-12-kotoba-time'
 
 
 def cm_daily_menu_allowed(menu, kuku_ready=False):
@@ -4417,6 +4417,66 @@ def cm_plan_menus(catalog, age):
     return menus
 
 
+def cm_kotoba_times(rows, menus, starts, ends, items, spans, unknown, reloaded):
+    from collections import defaultdict
+    from statistics import median
+    rounds, answers = defaultdict(list), defaultdict(list)
+    counts = {(m['menu_id'], m['content_version']): m.get('question_count_default')
+              for m in menus if m['source_app'] == 'kotoba'}
+    for aid, start in starts.items():
+        if aid[0] != 'kotoba' or aid in reloaded:
+            continue
+        sp = start['payload']
+        key = (sp.get('menu_id'), start['content_version'])
+        end = ends.get(aid)
+        if not end or key not in counts or aid in unknown or sp.get('mode') != 'challenge':
+            continue
+        ep = end['payload']
+        n = ep.get('answered_count')
+        if ep.get('status') != 'completed' or not n or n != sp.get('planned_question_count'):
+            continue
+        lo, hi = cm_plan_date(start['occurred_at']), cm_plan_date(end['occurred_at'])
+        if not lo or not hi:
+            continue
+        intervals = [(max(a, lo), min(b, hi)) for a,b in spans.get(aid, ())
+                     if max(a, lo) < min(b, hi)]
+        ms = sum((b-a).total_seconds()*1000 for a,b in cm_plan_union(intervals))
+        if ms > 0:
+            rounds[key].append((end['occurred_at'], ms/n))
+    seen = set()
+    for e in rows:
+        if e['source_app'] != 'kotoba' or e['event_type'] != 'response_submitted':
+            continue
+        aid = ('kotoba', e['attempt_id'])
+        occurrence = (aid, e.get('occurrence_id'))
+        start, item = starts.get(aid), items.get(occurrence)
+        if not start or not item or occurrence in seen or aid in reloaded:
+            continue
+        sp, ip, rp = start['payload'], item['payload'], e['payload']
+        ms = rp.get('answer_latency_ms')
+        if (sp.get('mode') != 'challenge' or ip.get('parent_occurrence_id') or ip.get('presentation_kind') == 'retry'
+                or rp.get('response_index') != 1 or rp.get('response_status') != 'answered'
+                or rp.get('timing_quality') != 'complete' or type(ms) not in (int,float) or not 0 < ms <= 86400000):
+            continue
+        seen.add(occurrence)
+        answers[sp.get('menu_id'), start['content_version']].append(ms)
+    result = {}
+    for key, n in counts.items():
+        if type(n) != int or n < 1:
+            continue
+        samples = [ms for _, ms in sorted(rounds[key])[-10:]]
+        basis = '完了した単元の学習時間'
+        if not samples:
+            samples = answers[key][-30:]
+            if len(samples) < 3:
+                continue
+            basis = '初回解答時間からの推定'
+        per_question = median(samples)
+        result[('kotoba', *key)] = dict(ms=max(1, round(per_question*n)), question_count=n,
+            per_question_ms=round(per_question), timing_label=basis, count=len(samples))
+    return result
+
+
 def cm_plan_analyze(events, menus, profile, today):
     """First scored submissions only; app support/retries never count as unaided mastery."""
     from collections import defaultdict
@@ -4526,6 +4586,7 @@ def cm_plan_analyze(events, menus, profile, today):
         recent = sorted(values, reverse=True)[:10]
         if len(recent) >= 3:
             durations[key] = {'ms': round(median(x[1] for x in recent)), 'count': len(recent), 'question_count': recent[0][2]}
+    durations.update(cm_kotoba_times(rows, menus, starts, ends, items, spans, unknown, reloaded))
     lo = datetime.combine(today, datetime.min.time(), TOKYO)
     hi = lo + timedelta(days=1)
     daily_spans = [(max(a,lo), min(b,hi)) for ss in spans.values() for a,b in ss if b>lo and a<hi]
@@ -4740,6 +4801,7 @@ def cm_plan_candidates(menus, analysis, today, focus=()):
             if duration<=0:
                 continue
             candidates.append({**m, 'duration_ms':int(duration), 'duration_basis':'measured' if measured else 'provisional',
+                'kotoba_timing':estimate if measured and m['source_app']=='kotoba' else None,
                 'reason':reason, 'score':score, 'key':key(m), 'accuracy':ss.get('accuracy')})
     candidates.extend(cm_english_candidates(menus, analysis, today, focus))
     for candidate in candidates:
@@ -5818,7 +5880,7 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
         'age': age, 'graduation': cm_graduation_fingerprint(graduation_states),
         'excluded_sources': sorted(excluded_sources)}
     if previous and previous['payload'].get('selection_context') == selection_context:
-        if previous['payload']['items'] or not refresh:
+        if not refresh:
             progress = cm_daily_progress(previous['payload'], profile, today)
             return cm_refresh_saved_daily_plan(previous, progress, profile, today)
 
@@ -5886,7 +5948,7 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
         key = (item['source_app'], item['menu_id'], item['content_version'])
         has_started = cm_plan_started(item, open_starts)
         reusable[key] = item
-        keep_assignment = migrate and key[0] in enabled_sources and key[:2] not in graduated
+        keep_assignment = (migrate or (refresh and old_context == selection_context)) and key[0] in enabled_sources and key[:2] not in graduated
         if not keep_assignment:
             if not item['completed_count'] and not has_started:
                 continue
@@ -5894,6 +5956,9 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
         item['focused'] = key[:2] in focus and key[:2] not in graduated
         if key in current:
             item['reason'] = current[key]['reason']
+            if key[0] == 'kotoba':
+                for field in ('duration_ms', 'duration_basis', 'kotoba_timing'):
+                    item[field] = current[key][field]
         elif not item['focused'] and item['reason'] == '重点単元の練習':
             item['reason'] = '単元の練習'
         items[key] = item
@@ -5987,6 +6052,10 @@ def cm_plan_items_html(items, links=None):
         if category.startswith(source):category=category[len(source):].lstrip(' ·・')
         subject=html.escape(source)+(' · '+html.escape(category) if category else '')
         source=html.escape(source);basis='本人の実測' if item['duration_basis']=='measured' else '仮の目安'
+        timing = item.get('kotoba_timing') or {}
+        if timing.get('timing_label'):
+            basis = (f"{timing['timing_label']} · 1問あたり約{timing['per_question_ms']/1000:.1f}秒"
+                     f" · 1回{timing['question_count']}問で約{item['duration_ms']/60000:.1f}分")
         medals=''.join('<span class="cm-plan-medal cm-plan-medal-'+html.escape(m['grade'])+'" aria-label="'+GRADE_NAMES[m['grade']]+'メダル">'+GRADE_NAMES[m['grade']]+'</span>' for m in item.get('medals',[]))
         retry=total>0 and count>=total
         badge='<span class="cm-plan-finished" role="status">🌸 達成済み</span>' if done else ''
@@ -6229,7 +6298,7 @@ def render_daily_plan(apps, return_event=None):
             st.write('1日の目安は年齢×10分です。休憩は学習時間に含めません。'
                      '同じ単元は1日3回を目安にします。配分を変更しても、完了済み・進行中の課題は残ります。')
             st.write('「学習しない」にした分類はここに表示されません。学んだ記録は残ります。')
-            st.write('所要時間は保証値ではありません。同じ条件の完了記録が3回以上そろうと直近10回までの実測中央値を使い、それまでは仮の目安を表示します。')
+            st.write('所要時間は保証値ではありません。国語・ことばは同じ単元・級の完了記録を優先し、完了記録がない場合は初回解答3問以上から推定します。ほかの教科は同じ条件の完了記録が3回以上そろうと直近10回までの実測中央値を使い、それまでは仮の目安を表示します。')
             st.caption('学習ログから判定する適応型モデルです。生成AIへのデータ送信やAPIの追加料金はありません。画面外での助力や内面の理解は断定しません。')
 
     if (st.session_state.get('cm_receipt_jump') or {}).get('place')=='plan':cm_receipt_jump_ui()
