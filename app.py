@@ -185,6 +185,7 @@ def cm_diag_http_error(error, action):
     if code:
         fields['provider_code'] = code
     cm_diag_record('http_error',action,status='error',error=RuntimeError(message),**fields)
+    return code
 
 
 def cm_diag_begin_action(key):
@@ -3136,10 +3137,23 @@ def cm_secret(name, default=''):
 
 
 class CMAPIError(RuntimeError):
-    def __init__(self, message, *, http_status=None, retryable=False):
+    def __init__(self, message, *, http_status=None, provider_code=None, retryable=False):
         super().__init__(message)
         self.http_status = http_status
+        self.provider_code = provider_code
         self.retryable = retryable
+
+
+class CMServiceConfigError(RuntimeError):
+    pass
+
+
+class CMAccountStepError(RuntimeError):
+    def __init__(self, stage, error):
+        super().__init__(stage)
+        self.stage = stage
+        self.http_status = getattr(error, "http_status", None)
+        self.provider_code = getattr(error, "provider_code", None)
 
 
 def cm_api_request(url, method, path, *, key, token=None, payload=None, params=None, timeout=8, prefer=None):
@@ -3161,8 +3175,8 @@ def cm_api_request(url, method, path, *, key, token=None, payload=None, params=N
                 raw=gzip.decompress(raw)
             return json.loads(raw) if raw else None
     except HTTPError as e:
-        cm_diag_http_error(e, 'cm_api_request')
-        raise CMAPIError(f'通信に失敗しました（HTTP {e.code}）', http_status=e.code,
+        code = cm_diag_http_error(e, 'cm_api_request')
+        raise CMAPIError(f'通信に失敗しました（HTTP {e.code}）', http_status=e.code, provider_code=code,
                          retryable=e.code in (408, 500, 502, 503, 504)) from None
     except (URLError, TimeoutError, OSError) as exc:
         cm_diag_record('network_error','cm_api_request',status='error',error=exc)
@@ -3362,11 +3376,34 @@ def cm_account_request(method, path, payload=None, params=None, prefer=None, *, 
     return cm_api_request(url, method, path, key=key, payload=payload, params=params, prefer=prefer, timeout=timeout)
 
 
+def cm_account_step(stage, operation, *args, **kwargs):
+    try:
+        return operation(*args, **kwargs)
+    except CMServiceConfigError as exc:
+        raise CMAccountStepError("接続設定", exc) from None
+    except RuntimeError as exc:
+        raise CMAccountStepError(stage, exc) from None
+
+
+def cm_account_error_text(error):
+    if isinstance(error, CMAccountStepError):
+        details = [error.stage]
+        if error.http_status:
+            details.append(f"HTTP {error.http_status}")
+        if error.provider_code:
+            details.append(error.provider_code)
+        return "通信に失敗しました（" + " / ".join(details) + "）。"
+    return "通信に失敗しました。"
+
+
 def cm_account_gate(username):
     bucket = hashlib.sha256(("account:" + username).encode()).hexdigest()
-    allowed = cm_account_request("POST", "/rpc/chokomana_account_gate", {"bucket_key": bucket})
-    if allowed is not True:
+    allowed = cm_account_step("ログイン試行の確認", cm_account_request, "POST",
+                              "/rpc/chokomana_account_gate", {"bucket_key": bucket})
+    if allowed is False:
         raise ValueError("入力を繰り返したため、10分ほど待ってからお試しください。")
+    if allowed is not True:
+        raise CMAccountStepError("ログイン試行の確認", RuntimeError("予期しない応答"))
     return bucket
 
 
@@ -3374,12 +3411,18 @@ def cm_account_new_session(profile, username, bucket):
     import secrets
     token = secrets.token_hex(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
-    cm_account_request("POST", "/rest/v1/chokomana_account_sessions", {
+    cm_account_step("ログイン情報の保存", cm_account_request, "POST", "/rest/v1/chokomana_account_sessions", {
         "token_hash": token_hash, "profile_id": profile,
         "expires_at": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
     }, prefer="return=minimal")
-    cm_account_request("PATCH", "/rest/v1/chokomana_auth_limits", {"attempts": 0},
-                       {"bucket_hash": "eq." + bucket}, "return=minimal")
+    try:
+        cm_account_request("PATCH", "/rest/v1/chokomana_auth_limits", {"attempts": 0},
+                           {"bucket_hash": "eq." + bucket}, "return=minimal")
+    except RuntimeError as exc:
+        # The verified session is already saved; the attempt counter can expire on its normal schedule.
+        cm_diag_record("auth_maintenance", "reset_login_attempts", status="error",
+                       http_status=getattr(exc, "http_status", None),
+                       provider_code=getattr(exc, "provider_code", None))
     return {"profile_id": profile, "username": username, "token": token}
 
 
@@ -3407,10 +3450,12 @@ def cm_login_account(username, password):
     if not isinstance(password, str) or not 1 <= len(password) <= 128:
         raise ValueError("ユーザー名とパスワードを確認してください。")
     bucket = cm_account_gate(name)
-    rows = cm_account_request("GET", "/rest/v1/chokomana_accounts", params={
+    account = cm_account_step("アカウント照会", cm_read_account_row, "chokomana_accounts", {
         "username": "eq." + name, "select": "username,profile_id,password_hash", "limit": "1",
     })
-    account = rows[0] if isinstance(rows, list) and len(rows) == 1 else None
+    if account is not None and not all(isinstance(account.get(field), str)
+                                      for field in ("username", "profile_id", "password_hash")):
+        raise CMAccountStepError("アカウント照会", RuntimeError("予期しない応答"))
     encoded = account["password_hash"] if account else "scrypt$16384$8$1$" + "0"*32 + "$" + "0"*64
     matches = cm_password_matches(password, encoded)
     if not account or not matches:
@@ -3437,7 +3482,7 @@ def cm_restore_account(token):
     if not isinstance(token, str) or not re.fullmatch(r"[a-f0-9]{64}", token):
         return None
     token_hash = hashlib.sha256(token.encode()).hexdigest()
-    session = cm_read_account_row("chokomana_account_sessions", {
+    session = cm_account_step("保存済みログインの照会", cm_read_account_row, "chokomana_account_sessions", {
         "token_hash": "eq." + token_hash, "expires_at": "gt." + datetime.now(timezone.utc).isoformat(),
         "select": "profile_id", "limit": "1",
     })
@@ -3446,7 +3491,7 @@ def cm_restore_account(token):
     profile = session.get("profile_id")
     if not isinstance(profile, str) or not profile:
         raise RuntimeError("ログイン確認の応答形式が不正です。")
-    account = cm_read_account_row("chokomana_accounts", {
+    account = cm_account_step("アカウント照会", cm_read_account_row, "chokomana_accounts", {
         "profile_id": "eq." + profile, "select": "username,profile_id", "limit": "1",
     })
     if account is None:
@@ -3812,8 +3857,8 @@ def cm_account_form(legacy_token):
                 st.rerun()
             except ValueError as exc:
                 cm_error(str(exc))
-            except RuntimeError:
-                cm_error("接続できませんでした。入力はそのままで、もう一度お試しください。")
+            except RuntimeError as exc:
+                cm_error(cm_account_error_text(exc) + "入力はそのままで、もう一度お試しください。")
         st.caption("復旧用メールは設定画面でも登録できます。メール確認が完了すると、パスワードの再設定に使えます。")
         if signup and legacy_token:
             st.caption("このブラウザに未登録の学習履歴があれば、登録時に引き継ぎます。")
@@ -3851,9 +3896,7 @@ def cm_hub_identity():
         try:
             account = cm_restore_account(token)
         except RuntimeError as exc:
-            http_status = getattr(exc, "http_status", None)
-            detail = f"（HTTP {http_status}）" if http_status else ""
-            cm_error("保存済みのログインを確認できませんでした。" + detail)
+            cm_error("保存済みのログインを確認できませんでした。" + cm_account_error_text(exc))
             if cm_button("再試行", key="cm_account_retry"):
                 st.rerun()
             if cm_button("ログインし直す", key="cm_account_open_login"):
@@ -3903,7 +3946,7 @@ def cm_service_config():
     url=cm_secret('SUPABASE_URL',CM_PUBLIC_URL)
     key=cm_secret('SUPABASE_SERVICE_ROLE_KEY') or cm_secret('SUPABASE_SECRET_KEY')
     if not url.startswith('https://') or not key:
-        raise RuntimeError('Supabaseのサーバー側接続設定が不足しています')
+        raise CMServiceConfigError('Supabaseのサーバー側接続設定が不足しています')
     return url,key
 
 
