@@ -8,7 +8,7 @@ daily speech awards in public.chokomana_speech_medals (see speech_medals.sql).
 Deploy: rename this file to app.py in the hub's own GitHub repository.
 Apply the current subject_balance.sql to the hub's Supabase database to enable
 school-subject percentages and study source preferences.
-Apply train_new_badge.sql to enable the 72-hour NEW badge in the train collection.
+Apply train_new_badge.sql to supply first-acquisition data for the daily NEW badge.
 Streamlit Cloud already provides streamlit; this file uses only Python stdlib
 for Supabase REST requests (no supabase-py dependency).
 
@@ -2162,10 +2162,14 @@ def cm_train_reel_cell(train=None, *, matched=False, decorative=False):
     return f'<div class="cm-train-cell{state}">{face}</div>'
 
 
-def cm_train_prize_popup(train, *, is_new=False):
+def cm_train_prize_popup(train, *, new_until=None):
     line, series, artwork = CM_TRAIN_SYMBOLS[train]
     destination, feature = CM_TRAIN_DETAILS[train]
-    badge = '<span class="cm-train-new-badge" aria-label="はじめてゲット">NEW</span>' if is_new else ''
+    badge = ""
+    if new_until:
+        expires = html.escape(new_until, quote=True)
+        badge = (f'<span class="cm-train-new-badge" data-new-until="{expires}" '
+                 'aria-label="はじめてゲット">NEW</span>')
     return (
         '<details class="cm-train-prize" open="open">'
         '<summary class="cm-train-prize-summary">とじる</summary>'
@@ -2180,7 +2184,7 @@ def cm_train_prize_popup(train, *, is_new=False):
     )
 
 
-def cm_train_board(result, animate=False, *, spinning=False, is_new=False):
+def cm_train_board(result, animate=False, *, spinning=False, new_until=None):
     board = (result or {}).get("board") or []
     complete = len(board) == 9
     animate = animate and complete
@@ -2216,7 +2220,7 @@ def cm_train_board(result, animate=False, *, spinning=False, is_new=False):
         for line, key in CM_TRAIN_REPRESENTATIVES.items()
     ) if complete or spinning else ""
     motion = " cm-train-reveal" if animate else " cm-train-spinning" if spinning else ""
-    popup = cm_train_prize_popup(prize, is_new=is_new) if animate and prize in CM_TRAIN_SYMBOLS else ""
+    popup = cm_train_prize_popup(prize, new_until=new_until) if animate and prize in CM_TRAIN_SYMBOLS else ""
     return (f'<section class="cm-train-machine{motion}" aria-label="電車ルーレット" '
             f'style="--finish:{CM_TRAIN_REEL_STOPS[-1]}ms;{artwork}">'
             f'<div class="cm-train-grid">{"".join(windows)}</div>'
@@ -2240,7 +2244,9 @@ CM_TRAIN_COLLECTION_POPUP = """<dialog class="cm-train-detail" id="cm-train-deta
 (() => {
   const root = document.currentScript.parentElement;
   const popup = root.querySelector("dialog");
-  for (const badge of root.querySelectorAll("[data-new-until]")) {
+  const badges = [...root.querySelectorAll("[data-new-until]"),
+    ...document.querySelectorAll(".cm-train-prize [data-new-until]")];
+  for (const badge of badges) {
     const ms = Date.parse(badge.dataset.newUntil) - Date.now();
     if (ms > 0) window.setTimeout(() => badge.remove(), ms);
     else badge.remove();
@@ -2261,14 +2267,20 @@ CM_TRAIN_COLLECTION_POPUP = """<dialog class="cm-train-detail" id="cm-train-deta
 
 
 def cm_train_recent_new(overview, *, now=None):
-    now = now or datetime.now(timezone.utc)
+    local_now = (now or now_jst()).astimezone(TOKYO)
+    midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    next_midnight = (midnight + timedelta(days=1)).isoformat()
     recent = {}
     for train, acquisition in (overview.get("new_trains") or {}).items():
         if train not in CM_TRAIN_SYMBOLS or not isinstance(acquisition, dict):
             continue
         expires = cm_plan_date(acquisition.get("new_until"))
-        if expires and expires > now:
-            recent[train] = (acquisition.get("request_id"), expires.isoformat())
+        if expires is None:
+            continue
+        # The overview adds 72 hours to the first win's recorded timestamp.
+        acquired_at = expires - timedelta(hours=72)
+        if midnight <= acquired_at <= local_now:
+            recent[train] = (acquisition.get("request_id"), next_midnight)
     return recent
 
 
@@ -2398,15 +2410,9 @@ def render_train_roulette(profile):
     pending_prize = (new_result or {}).get("prize_train")
     if len((new_result or {}).get("board") or ()) != 9 or pending_prize not in CM_TRAIN_SYMBOLS:
         pending_prize = None
-    is_new = False
-    if pending_prize:
-        if "new_trains" in overview:
-            first_win = recent_new.get(pending_prize)
-            is_new = bool(first_win and first_win[0] == new_result.get("request_id"))
-        else:
-            # Older database versions still identify an unambiguous first win at reveal.
-            is_new = collection.get(pending_prize) == 1
-    board_slot.html(cm_train_board(new_result or overview.get("latest"), bool(new_result), is_new=is_new))
+    first_win = recent_new.get(pending_prize)
+    new_until = first_win[1] if first_win and first_win[0] == new_result.get("request_id") else None
+    board_slot.html(cm_train_board(new_result or overview.get("latest"), bool(new_result), new_until=new_until))
     if notice:
         st.info(notice)
     balances = overview.get("balances", {})
