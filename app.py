@@ -623,7 +623,7 @@ def cm_support_prefetch(groups):
                 for t,k in targets[offset:offset+40] if t==kind)
             clauses.append('and(target_type.eq.'+kind+',target_key.in.('+values+'))')
         params={'profile_id':'eq.'+profile,'or':'('+','.join(clauses)+')',
-            'select':'id,target_type,target_key,source_app,stamp_key,created_at,supporter:cm_watch_supporters(name,color)',
+            'select':'id,target_type,target_key,source_app,stamp_key,message_text,created_at,supporter:cm_watch_supporters(name,color)',
             'order':'created_at.desc,id','limit':'500'}
         for page in range(0,100000,500):
             part=cm_account_request('GET','/rest/v1/cm_watch_encouragements',params={**params,'offset':str(page)})
@@ -656,10 +656,62 @@ def cm_support_html(rows, key, source=None):
         name=html.escape(str(actor.get('name') or 'おうちの人'),quote=True)
         color=CM_SUPPORT_COLORS.get(actor.get('color'),'#43814d')
         anchor=cm_notice_anchor('stamp','',row['id']) if row.get('id') else ''
-        parts.append('<details id="'+anchor+'" class="cm-stamp-receipt"><summary style="border-color:'+color+'" aria-label="送信者を確認">'+art+'</summary><span class="cm-stamp-sender">'+name+'</span></details>')
+        message = row.get('message_text')
+        if isinstance(message, str) and message.strip():
+            rate = CM_SPEECH_SPEEDS[cm_speech_speed()][1]
+            text = html.escape(message).replace('\r\n', '\n').replace('\r', '\n').replace('\n', '&#10;')
+            parts.append(
+                f'<div id="{anchor}" class="cm-support-message" style="--cm-sender-color:{color}">'
+                f'<button type="button" class="cm-support-speak" data-rate="{rate}" '
+                f'aria-label="メッセージをよみあげる" aria-description="{text}" title="{name}">'
+                f'<span class="cm-support-message-art" aria-hidden="true">{art}</span>'
+                f'<span class="cm-support-message-text">{text}</span>'
+                '<span class="cm-support-speaker" aria-hidden="true">🔊</span></button>'
+                '<span class="cm-support-speech-status" role="status" hidden></span></div>'
+            )
+        else:
+            parts.append('<details id="'+anchor+'" class="cm-stamp-receipt"><summary style="border-color:'+color+'" aria-label="送信者を確認">'+art+'</summary><span class="cm-stamp-sender">'+name+'</span></details>')
         if len(parts)>=8:break
     if not parts:return ''
     return '<style>.cm-support-strip{display:flex;flex-wrap:wrap;gap:5px;margin:5px 0}.cm-stamp-receipt{display:inline-block;position:relative;flex:0 0 auto;margin:0!important;padding:0!important;border:0!important}.cm-stamp-receipt summary{display:flex!important;align-items:center;justify-content:center;list-style:none!important;width:40px;height:40px;min-height:40px!important;padding:3px!important;background:#fff;border:1.5px solid;border-radius:10px;cursor:pointer}.cm-stamp-receipt summary::marker{content:""}.cm-stamp-receipt summary::-webkit-details-marker{display:none}.cm-stamp-receipt .cm-stamp-icon{display:block;width:32px;height:32px}.cm-stamp-receipt .cm-stamp-sender{position:absolute;left:0;top:44px;z-index:30;background:#fff;color:#24344e;border:1px solid #c7d4d4;border-radius:8px;padding:5px 8px;font-size:14px;line-height:1.5;white-space:nowrap;box-shadow:0 2px 8px #0002}.cm-stamp-receipt:not([open])>.cm-stamp-sender{display:none}</style><div class="cm-support-strip">'+''.join(parts)+'</div>'
+
+CM_SUPPORT_SPEECH = '''<style>
+.cm-support-message{max-width:100%;min-width:0}
+.cm-support-speak{display:inline-flex;align-items:center;gap:.4rem;max-width:100%;min-height:44px;
+  padding:.3rem .55rem;border:2px solid var(--cm-sender-color);border-radius:14px;
+  background:#fffdf2;color:#233951;text-align:left;font:inherit;font-weight:700;cursor:pointer}
+.cm-support-speak:focus-visible{outline:3px solid #235b8a;outline-offset:2px}
+.cm-support-message-art,.cm-support-speaker{flex:none}
+.cm-support-message-art .cm-stamp-icon{width:28px;height:28px}
+.cm-support-message-text{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.cm-support-speech-status:not([hidden]){display:block;color:#535a6b;font-size:.78rem}
+</style><script>
+(() => {
+  if (window.cmSupportSpeechAttached) return;
+  window.cmSupportSpeechAttached = true;
+  document.addEventListener('click', event => {
+    const button = event.target?.closest?.('.cm-support-speak');
+    if (!button) return;
+    const text = button.querySelector('.cm-support-message-text')?.textContent;
+    const status = button.nextElementSibling;
+    if (!text || !status) return;
+    const feedback = message => { status.textContent = message; status.hidden = !message; };
+    const unavailable = 'この端末では読み上げを再生できません。';
+    const synth = window.speechSynthesis;
+    if (!synth || !window.SpeechSynthesisUtterance) { feedback(unavailable); return; }
+    feedback('');
+    const speech = new SpeechSynthesisUtterance(text);
+    speech.lang = 'ja-JP';
+    speech.rate = Number(button.dataset.rate) || 1;
+    speech.onerror = event => {
+      if (!['canceled', 'interrupted'].includes(event.error)) feedback(unavailable);
+    };
+    try { synth.cancel(); synth.speak(speech); }
+    catch { feedback(unavailable); }
+  });
+})();
+</script>'''
+
 
 def stamp_grid_html(rows: list[dict]) -> str:
     """HTML stamp cards, HTML-escaped because Supabase columns are external data."""
@@ -1091,7 +1143,7 @@ def cm_receipts(force=False):
     profile=st.session_state.get('cm_profile');cached=st.session_state.get('cm_receipt_cache')
     if not force and cached and cached['profile']==profile and time.time()-cached['at']<18:return cached['data']
     data=cm_watch_request('child_poll')
-    data['encouragements']=cm_account_request('GET','/rest/v1/cm_watch_encouragements',params={'profile_id':'eq.'+profile,'select':'id,target_type,target_key,source_app,stamp_key,created_at,read_at,supporter:cm_watch_supporters(name,color)','order':'created_at.desc','limit':'200'}) or []
+    data['encouragements']=cm_account_request('GET','/rest/v1/cm_watch_encouragements',params={'profile_id':'eq.'+profile,'select':'id,target_type,target_key,source_app,stamp_key,message_text,created_at,read_at,supporter:cm_watch_supporters(name,color)','order':'created_at.desc','limit':'200'}) or []
     ids=tuple(r['id'] for r in data.get('encouragements',[]))
     if not cached or cached.get('ids')!=ids:st.session_state.pop('cm_support_cache',None)
     st.session_state['cm_receipt_cache']={'profile':profile,'at':time.time(),'data':data,'ids':ids}
@@ -1243,10 +1295,10 @@ def render_receipts():
     if cm_button('おたよりを更新',key='cm_receipt_refresh'):st.session_state.pop('cm_receipt_cache',None)
     try:data=cm_receipts()
     except RuntimeError as exc:st.error(str(exc));return
-    kind=st.radio('表示するもの',['スタンプ','メッセージ'],index=1 if st.session_state.get('cm_receipt_kind')=='voice' else 0,horizontal=True,key='cm_receipt_filter_'+st.session_state.get('cm_receipt_kind','all'))
-    if kind=='スタンプ':
+    kind=st.radio('表示するもの',['スタンプ・ひとこと','声のおたより'],index=1 if st.session_state.get('cm_receipt_kind')=='voice' else 0,horizontal=True,key='cm_receipt_filter_'+st.session_state.get('cm_receipt_kind','all'))
+    if kind=='スタンプ・ひとこと':
         rows=data.get('encouragements',[])
-        if not rows:st.info('まだスタンプはありません。')
+        if not rows:st.info('まだ応援はありません。')
         names={'plan':'きょうやることへの応援','menu':'単元への応援','attempt':'獲得したメダルへの応援','question':'問題への応援','general':'あなたへの応援'}
         for row in rows:
             with st.container(border=True):
@@ -3113,6 +3165,7 @@ def main() -> None:
     if not linked:
         return
     render_navigation()
+    st.html(CM_SUPPORT_SPEECH, unsafe_allow_javascript=True)
     cm_receipt_notice()
     if st.session_state.cm_page == 'inbox':
         render_receipts()
