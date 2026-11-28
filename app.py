@@ -24,6 +24,7 @@ Optional Streamlit Secrets:
   SOROBAN_APP_URL = "https://...streamlit.app"
   GEOMETRY_APP_URL = "https://...streamlit.app"
   ENGLISH_APP_URL = "https://...streamlit.app"
+  HISTORY_APP_URL = "<しゃかい・れきしの Streamlit 公開 URL>"
   GEOGRAPHY_APP_URL = "https://chokomanasocialgeography-zcrrjkj2kznmos8j28zae5.streamlit.app/"
 
 Security: username/password accounts and sessions are verified server-side; launch tickets are one-time,
@@ -78,7 +79,7 @@ CM_MEDAL_SPEECH_SPELLINGS = {
     "もじ": "文字", "すう": "数", "えい": "英 映 永 エイ", "おん": "音 恩 温",
     "ち": "地 血 字 知", "はな": "花 鼻 華", "ごい": "語彙 語い", "けろ": "ケロ",
 }
-SUBJECT_NAMES = {"kotoba": "国語", "soroban": "そろばん", "geometry": "図形", "english": "英語", "moji": "ひらがな・カタカナ", "reading": "読書", "geography": "社会・地理"}
+SUBJECT_NAMES = {"kotoba": "国語", "soroban": "そろばん", "geometry": "図形", "english": "英語", "moji": "ひらがな・カタカナ", "reading": "読書", "geography": "社会・地理", "history": "社会・歴史"}
 CM_SCHOOL_SUBJECTS = {
     'japanese': ('国語', ('kotoba', 'reading')),
     'math': ('算数', ('soroban', 'geometry')),
@@ -96,6 +97,7 @@ APP_DEFINITIONS = (
     {"id": "soroban", "title": "そろばん", "tag": "計算にチャレンジ", "symbol": "算", "secret": "SOROBAN_APP_URL", "icon": "123"},
     {"id": "geometry", "title": "ずけいのアトリエ", "tag": "図形で考える", "symbol": "図", "secret": "GEOMETRY_APP_URL", "icon": "△"},
     {"id": "geography", "title": "しゃかい・ちり", "tag": "日本地図パズル", "symbol": "地", "secret": "GEOGRAPHY_APP_URL", "icon": "地"},
+    {"id": "history", "title": "しゃかい・れきし", "tag": "江戸といまの東京", "symbol": "歴", "secret": "HISTORY_APP_URL", "icon": "歴"},
     {"id": "english", "title": "えいご・ジュニア", "tag": "おとと ことばで あそぼう", "symbol": "英", "secret": "ENGLISH_APP_URL", "icon": "ABC"},
     {"id": "moji", "title": "ひらがな・カタカナ", "tag": "もじを かこう", "symbol": "字", "secret": "MOJI_APP_URL", "icon": "あア"},
     {"id": "reading", "title": "ほんのともだち", "tag": "ほんを よむ おてつだい", "symbol": "読", "secret": "READING_APP_URL", "icon": "📖"},
@@ -2593,21 +2595,21 @@ def cm_prepare_launch_links(apps):
             'link':cm_launch_url(app['url'],code),'expiry':expiry}
     if payload:
         url,key = cm_service_config()
-        try:
-            cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,
-                           payload=payload,prefer='return=minimal')
-        except RuntimeError as exc:
-            # An older shared schema can reject geography tickets before its migration.
-            if "geography" not in pending or "HTTP 400" not in str(exc):
+        while payload:
+            try:
+                cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,
+                               payload=payload,prefer='return=minimal')
+                break
+            except RuntimeError as exc:
                 if isinstance(exc, CMAPIError) and exc.retryable:
                     st.session_state['cm_link_retry_at'] = time.monotonic() + 60
                     return links
-                raise
-            pending.pop("geography")
-            other_tickets = [ticket for ticket in payload if ticket["source_app"] != "geography"]
-            if other_tickets:
-                cm_api_request(url,'POST','/rest/v1/chokomana_launch_tickets',key=key,
-                               payload=other_tickets,prefer='return=minimal')
+                # Keep the established cards usable before an optional source's migration.
+                source = next((name for name in ("history", "geography") if name in pending), None)
+                if not source or "HTTP 400" not in str(exc):
+                    raise
+                pending.pop(source)
+                payload = [ticket for ticket in payload if ticket["source_app"] != source]
         st.session_state.pop('cm_link_retry_at', None)
         for source, cache in pending.items():
             st.session_state['cm_link_'+source] = cache
@@ -2629,7 +2631,7 @@ def cm_launch_connection_hints(apps):
 
 def home_cards_html(apps: list[dict]) -> str:
     """One native anchor per subject, kept side-by-side at phone widths."""
-    labels = {"kotoba": "こくご", "soroban": "そろばん", "geometry": "ずけい", "english": "えいご", "moji": "もじ", "reading": "どくしょ", "geography": "しゃかい・ちり"}
+    labels = {"kotoba": "こくご", "soroban": "そろばん", "geometry": "ずけい", "english": "えいご", "moji": "もじ", "reading": "どくしょ", "geography": "しゃかい・ちり", "history": "しゃかい・れきし"}
     icons = {
         "kotoba": '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 13c10-3 17-1 24 4 7-5 14-7 24-4v37c-9-3-16-1-24 4-8-5-15-7-24-4Z" fill="currentColor" opacity=".16"/><path d="M8 13c10-3 17-1 24 4 7-5 14-7 24-4v37c-9-3-16-1-24 4-8-5-15-7-24-4Zm24 4v37M15 25l10 3m-10 7 10 3m14-10 10-3m-10 13 10-3" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
         "soroban": '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="10" width="52" height="44" rx="5" fill="currentColor" opacity=".12"/><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 10h52v44H6ZM7 28h50M19 14v36m13-36v36m13-36v36"/></g><g fill="currentColor"><path d="m12 21 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5Zm13 0 7-5 7 5-7 5ZM12 35l7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Zm13-11 7-5 7 5-7 5Zm0 11 7-5 7 5-7 5Z"/></g></svg>',
@@ -2637,6 +2639,7 @@ def home_cards_html(apps: list[dict]) -> str:
     }
     icons['moji'] = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="5" width="44" height="54" rx="7" fill="currentColor" opacity=".14"/><path d="M16 21h24M16 32h15M16 43h12m4 7 4-12 14-14 8 8-14 14Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
     icons['reading'] = icons['kotoba']
+    icons['history'] = '<span aria-hidden="true" style="display:grid;place-items:center;height:100%;font-size:1.65em;font-weight:850">歴</span>'
     icons['geography'] = '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="m9 18 14-5 16 5 16-5v34l-16 5-16-5-14 5zM23 13v34m16-29v34" stroke="currentColor" stroke-width="3" stroke-linejoin="round" fill="none"/><circle cx="39" cy="29" r="4" fill="currentColor"/></svg>'
     icons['english'] = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="5" y="10" width="54" height="44" rx="12" fill="currentColor" opacity=".14"/><path d="M13 45 23 20l10 25M17 36h12M39 21v24h7c10 0 10-12 0-12h-7m0-12h6c9 0 9 12 0 12" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
     try:
@@ -2802,8 +2805,8 @@ def render_home(apps: list[dict]) -> None:
           .cm-subject-grid>.cm-subject:last-child:nth-child(odd){grid-column:auto;flex-direction:column;gap:5px}
           .cm-subject{gap:5px;padding:8px 4px;border-radius:14px}
           .cm-subject-icon{width:34px;height:34px}
-          .cm-subject-label,.cm-subject-geography .cm-subject-label{font-size:clamp(12px,3.4vw,17px)}
-          .cm-subject-geography .cm-subject-label{white-space:normal;text-align:center}
+          .cm-subject-label,.cm-subject-geography .cm-subject-label,.cm-subject-history .cm-subject-label{font-size:clamp(12px,3.4vw,17px)}
+          .cm-subject-geography .cm-subject-label,.cm-subject-history .cm-subject-label{white-space:normal;text-align:center}
           .cm-subject-go{white-space:normal;text-align:center;font-size:11px;padding:2px 5px}
         }</style>''', unsafe_allow_html=True)
         heading, speech_preview, settings_button = st.columns([5, 2, 1], gap="small", vertical_alignment="center")
@@ -3185,7 +3188,10 @@ def main() -> None:
         app_url = _setting(spec["secret"])
         if spec["id"] == "geography" and not _valid_https_url(app_url):
             app_url = DEFAULT_GEOGRAPHY_APP_URL
-        apps.append({**spec, "url": app_url, "ready": _valid_https_url(app_url)})
+        ready = _valid_https_url(app_url)
+        if spec["id"] == "history" and not ready:
+            continue
+        apps.append({**spec, "url": app_url, "ready": ready})
     if st.session_state.cm_page == "home":
         render_home(apps)
         return
@@ -3234,7 +3240,7 @@ import streamlit.components.v1 as components
 
 CM_PUBLIC_URL = 'https://keewulninyoeylgflshb.supabase.co'
 CM_PUBLIC_KEY = 'sb_publishable_iud9MpcZSxZHzSczRTIDqg_4BNZWQ8g'
-CM_SOURCE_KEYS = ('kotoba','soroban','geometry','english','moji','reading','geography')
+CM_SOURCE_KEYS = ('kotoba','soroban','geometry','english','moji','reading','geography','history')
 CM_TICKET_SECONDS = 900
 
 
