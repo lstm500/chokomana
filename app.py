@@ -4752,10 +4752,12 @@ def cm_plan_analyze(events, menus, profile, today):
     durations.update(cm_unit_measurements(starts, ends, menus))
     lo = datetime.combine(today, datetime.min.time(), TOKYO)
     hi = lo + timedelta(days=1)
-    daily_spans = [(max(a,lo), min(b,hi)) for ss in spans.values() for a,b in ss if b>lo and a<hi]
-    measured = round(sum((b-a).total_seconds()*1000 for a,b in cm_plan_union(daily_spans)))
+    daily_attempt_spans = {(source, str(attempt)): clipped for (source, attempt), ss in spans.items()
+                           if (clipped := [(max(a,lo), min(b,hi)) for a,b in ss if b>lo and a<hi])}
+    measured = round(sum((b-a).total_seconds()*1000 for a,b in cm_plan_union(
+        span for intervals in daily_attempt_spans.values() for span in intervals)))
     menu_map = {(m['source_app'],m['menu_id'],m['content_version']):m for m in menus}
-    estimated, missing = 0, 0
+    attempt_estimates, missing = {}, 0
     today_counts = defaultdict(int)
     completed = defaultdict(int)
     for aid, end in ends.items():
@@ -4772,11 +4774,13 @@ def cm_plan_analyze(events, menus, profile, today):
             m = menu_map.get(key)
             if m:
                 actual = sum((min(b,hi)-max(a,lo)).total_seconds()*1000 for a,b in cm_plan_union(spans[aid]) if b>lo and a<hi)
-                estimated += max(0, m['estimated_duration_ms'] - actual)
+                attempt_estimates[(aid[0], str(aid[1]))] = max(0, m['estimated_duration_ms'] - actual)
     partial_today = any(aid in unknown and any(b>lo and a<hi for a,b in ss) for aid,ss in spans.items())
-    return {'stats': stats, 'durations': durations, 'spent_ms': measured+round(estimated),
-            'measured_ms': measured, 'estimated_ms': round(estimated), 'missing_time': missing,
-            'partial_time': partial_today, 'today_counts': today_counts, 'completed': completed}
+    estimated = round(sum(attempt_estimates.values()))
+    return {'stats': stats, 'durations': durations, 'spent_ms': measured+estimated,
+            'measured_ms': measured, 'estimated_ms': estimated, 'missing_time': missing,
+            'partial_time': partial_today, 'today_counts': today_counts, 'completed': completed,
+            'daily_attempt_spans': daily_attempt_spans, 'daily_attempt_estimates': attempt_estimates}
 
 
 # Explicit planning prerequisites between independent soroban tracks. These are conservative
@@ -4878,9 +4882,14 @@ def cm_medal_progress(analysis, medals, menus, events, profile, today):
                 if (row['aid'] not in ended or missing_old) and row['when'].astimezone(TOKYO).date()==today:
                     actual=sum((b-a).total_seconds()*1000 for a,b in cm_plan_union(spans[row['aid']]))
                     extra=max(0,m['estimated_duration_ms']-actual)
-                    analysis['spent_ms']+=round(extra);analysis['estimated_ms']+=round(extra)
+                    extra = round(extra)
+                    analysis['spent_ms']+=extra;analysis['estimated_ms']+=extra
+                    attempt_estimates = analysis.get('daily_attempt_estimates')
+                    if attempt_estimates is not None:
+                        aid = row['aid']
+                        attempt_estimates[aid] = attempt_estimates.get(aid, 0) + extra
                     if row['aid'] not in ended:analysis['missing_time']+=1
-                    extra_by_source[m['source_app']]+=round(extra)
+                    extra_by_source[m['source_app']]+=extra
     analysis['medal_stats']={k:v['medals'] for k,v in stats.items() if 'medals' in v}
     analysis['legacy_medal_ms_by_source']=dict(extra_by_source)
     analysis['medal_summary']={s:dict(counts) for s,counts in summaries.items()}
@@ -5921,6 +5930,48 @@ def cm_plan_result_fingerprint(events, medals, today):
     return hashlib.sha256(json.dumps(sorted(set(completed))).encode()).hexdigest()
 
 
+def cm_plan_study_totals(items, events, analysis, excluded):
+    """Attribute time using the same credited attempts as the cards and explicit launches."""
+    from collections import defaultdict
+
+    owners, cards = {}, {}
+    for item in items:
+        item['study_ms'] = 0
+        item['study_estimated_ms'] = 0
+        if item['source_app'] not in excluded:
+            cards[item['plan_item_id']] = item
+            for attempt in item['completed_attempts']:
+                owners[item['source_app'], str(attempt)] = item['plan_item_id']
+    spans = analysis.get('daily_attempt_spans', {})
+    estimates = analysis.get('daily_attempt_estimates', {})
+    for event in events:
+        if event['event_type'] != 'session_started':
+            continue
+        key = (event['source_app'], str(event['attempt_id']))
+        if key not in spans and key not in estimates:
+            continue
+        payload = event['payload']
+        card = cards.get(payload.get('plan_item_id'))
+        if card and (card['source_app'], card['menu_id']) == (key[0], payload.get('menu_id')):
+            owners.setdefault(key, card['plan_item_id'])
+
+    card_spans, card_estimates = defaultdict(list), defaultdict(float)
+    for key, owner in owners.items():
+        card_spans[owner].extend(spans.get(key, ()))
+        card_estimates[owner] += estimates.get(key, 0)
+
+    def measured(intervals):
+        return round(sum((end - start).total_seconds() * 1000 for start, end in cm_plan_union(intervals)))
+
+    for ident, card in cards.items():
+        card['study_estimated_ms'] = round(card_estimates[ident])
+        card['study_ms'] = measured(card_spans[ident]) + card['study_estimated_ms']
+    listed = measured(span for intervals in card_spans.values() for span in intervals)
+    listed += round(sum(card_estimates.values()))
+    listed = min(listed, analysis['spent_ms'])
+    return {'plan_study_ms': listed, 'unlinked_study_ms': analysis['spent_ms'] - listed}
+
+
 def cm_daily_progress(payload, profile, today):
     """Refresh today's progress only; never reselect or reorder assigned work."""
     events, medals = cm_daily_progress_rows(profile, today)
@@ -5938,6 +5989,7 @@ def cm_daily_progress(payload, profile, today):
     planned=sum(i['duration_ms']*i['available_repetitions'] for i in items)
     reached=analysis['spent_ms']>=payload['target_ms']*.95
     return {**payload,'items':items,'spent_ms':analysis['spent_ms'],
+        **cm_plan_study_totals(items, events, analysis, excluded),
         'result_fingerprint':cm_plan_result_fingerprint(events, medals, today),
         'measured_ms':analysis['measured_ms'],'estimated_ms':analysis['estimated_ms'],
         'missing_time':analysis['missing_time'],'partial_time':analysis['partial_time'],
@@ -6176,6 +6228,7 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, minutes_per_year, exclu
         'result_fingerprint': cm_plan_result_fingerprint(events, stamps, today),
         'subject_spent_ms': spent, 'age': age, 'target_ms': target,
         'spent_ms': analysis['spent_ms'], 'measured_ms': analysis['measured_ms'],
+        **cm_plan_study_totals(reconciled, events, analysis, excluded_sources),
         'estimated_ms': analysis['estimated_ms'], 'missing_time': analysis['missing_time'],
         'partial_time': analysis['partial_time'], 'remaining_ms': remaining, 'planned_ms': planned,
         'items': reconciled, 'sources': sorted({m['source_app'] for m in menus if m['source_app'] in ready}),
@@ -6245,9 +6298,16 @@ def cm_plan_items_html(items, links=None):
         if count and len(item.get('medals',[]))<count and 'challenge' in item.get('mode_options',[]):
             medals+='<span class="cm-plan-medal-pending">メダル反映待ち</span>'
         status=badge+('<div class="cm-plan-earned">'+medals+'</div>' if medals else '')
+        remaining_ms = item['duration_ms'] * max(0, total - count)
+        timing_text = f'残り約{cm_minutes(remaining_ms)}分' if remaining_ms else ''
+        if item.get('study_ms'):
+            study_prefix = '学習済み 約' if item.get('study_estimated_ms') else '学習済み '
+            timing_text = ' · '.join(filter(None, (study_prefix + cm_minutes(item['study_ms']) + '分', timing_text)))
         parts.append('<li id="'+cm_notice_anchor('plan',item['source_app'],item['plan_item_id'])+'" class="cm-plan-item cm-plan-source-'+html.escape(item['source_app'],quote=True)+(' cm-plan-done' if done else '')+'">'+
             '<div class="cm-plan-heading"><span class="cm-plan-number">'+str(n)+'</span><span class="cm-plan-subject">'+subject+'</span></div>'+
-            '<h3>'+label+'</h3><div class="cm-plan-info"><span class="cm-plan-time">約'+cm_minutes(item['duration_ms']*max(0,total-count))+'分</span><span class="cm-plan-progress" aria-label="'+str(count)+'／'+str(total)+'回 完了">'+progress+'</span></div>'+
+            '<h3>'+label+'</h3><div class="cm-plan-info">'+
+            ('<span class="cm-plan-time">'+timing_text+'</span>' if timing_text else '')+
+            '<span class="cm-plan-progress" aria-label="'+str(count)+'／'+str(total)+'回 完了">'+progress+'</span></div>'+
             ('<div class="cm-plan-status">'+status+'</div>' if status else '')+
             cm_support_html(support,item.get('plan_item_id'),item['source_app'])+
             cm_support_html(menu_support,item.get('menu_id'),item['source_app'])+
@@ -6401,7 +6461,8 @@ def render_daily_plan(apps, return_event=None):
         if automatic_paused and not cache_matches:
             st.caption('同期を休止しています。「更新」で再試行できます。')
             return
-        if not automatic_paused and (refresh or return_event or not cache_matches or time.time()-cached['at']>=120):
+        if not automatic_paused and (refresh or return_event or not cache_matches or
+                                     'plan_study_ms' not in cached['payload'] or time.time()-cached['at']>=120):
             try:
                 feedback = (st.spinner('達成状況を更新しています…') if refresh or return_event
                             else nullcontext() if cache_matches else st.spinner('今日のリストを読み込んでいます…'))
@@ -6438,9 +6499,19 @@ def render_daily_plan(apps, return_event=None):
         visible_items = cm_visible_plan_items(p)
         completed = sum(bool(item['done']) for item in visible_items)
         pending_count = len(visible_items) - completed
-        summary=f'<p class="cm-plan-summary">{age}歳 · 目安{cm_minutes(p["target_ms"])}分 <span>学習済み {cm_minutes(p["spent_ms"])}分</span></p>'
+        summary = f'<p class="cm-plan-summary">{age}歳 · 目安{cm_minutes(p["target_ms"])}分'
+        if 'plan_study_ms' in p:
+            summary += f'<span>一覧の学習 {cm_minutes(p["plan_study_ms"])}分</span>'
+            if p['unlinked_study_ms']:
+                summary += f'<span>一覧にひもづかない学習 {cm_minutes(p["unlinked_study_ms"])}分</span>'
+        else:
+            summary += f'<span>今日の学習（全体） {cm_minutes(p["spent_ms"])}分</span>'
+        summary += '</p>'
         if visible_items:
             progress = f'達成 {completed}／{len(visible_items)}件'
+            completed_runs = sum(item.get('completed_count', 0) for item in visible_items)
+            if completed_runs:
+                progress += f' · {completed_runs}回完了'
             if pending_count:
                 progress += f' · 残り{pending_count}件（約{cm_minutes(p["planned_ms"])}分）'
             summary += f'<p class="cm-plan-subsummary">{progress}</p>'
@@ -6479,6 +6550,9 @@ def render_daily_plan(apps, return_event=None):
             st.write('復習間隔は正答が続くと1→3→7→14→30日へ延ばし、つまずくと翌日に戻します。効果を保証する日数ではなく、成績に応じて調整する初期設定です。')
             st.write('1日の目安は年齢×掛け目です。推奨の掛け目は1歳あたり10分です。休憩は学習時間に含めません。'
                      '同じ単元は1日3回を目安にします。配分を変更しても、完了済み・進行中の課題は残ります。')
+            st.write('課題から開いた学習と、同じ課題の完了として反映された学習は「一覧の学習」に集計します。'
+                     'ひもづかない学習時間は、課題を選ぶ時間枠から差し引きません。'
+                     '残り時間は未完了の回数から見積もり、同時に学習した時間は一覧合計で重複を除きます。')
             st.write('「学習しない」にした分類はここに表示されません。学んだ記録は残ります。')
             st.write('所要時間は保証値ではありません。国語・ことばは同じ単元・級の完了記録を優先し、完了記録がない場合は初回解答3問以上から推定します。ほかの教科は同じ条件の完了記録が3回以上そろうと直近10回までの実測中央値を使い、それまでは仮の目安を表示します。')
             st.caption('学習ログから判定する適応型モデルです。生成AIへのデータ送信やAPIの追加料金はありません。画面外での助力や内面の理解は断定しません。')
