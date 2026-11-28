@@ -8,6 +8,7 @@ daily speech awards in public.chokomana_speech_medals (see speech_medals.sql).
 Deploy: rename this file to app.py in the hub's own GitHub repository.
 Apply the current subject_balance.sql to the hub's Supabase database to enable
 school-subject percentages and study source preferences.
+Apply chokomana_daily_study_time.sql to enable the daily study time setting.
 Apply train_new_badge.sql to supply first-acquisition data for the daily NEW badge.
 Streamlit Cloud already provides streamlit; this file uses only Python stdlib
 for Supabase REST requests (no supabase-py dependency).
@@ -3685,8 +3686,6 @@ def render_settings():
         st.caption("直近2,000件を記録します。クリックから表示までは描画の目安です。学習アプリ内部の表示時間は含みません。")
     if manager_url := cm_mimamori_url():
         st.link_button('保護者の設定を開く', manager_url)
-    else:
-        render_plan_age()
     render_medal_audio_settings()
     # Share the existing account card and widget styles in both browser themes.
     with st.container(border=True, key="cm_account_form"):
@@ -4201,30 +4200,100 @@ def cm_plan_rows(table, params):
     raise RuntimeError('learning history pagination limit reached')
 
 
+CM_LEARNER_SETTINGS_TABLE = '/rest/v1/chokomana_learner_settings'
+CM_DEFAULT_MINUTES_PER_YEAR = 10
+CM_MINUTES_PER_YEAR_OPTIONS = range(1, 31)
+
+
 def cm_plan_settings(*, refresh=False):
     profile = st.session_state['cm_profile']
+    day = now_jst().date().isoformat()
     cache = st.session_state.get('cm_plan_settings')
     if (not refresh and cache and cache['profile'] == profile
-            and cache.get('day') == now_jst().date().isoformat() and time.time() - cache['at'] < 120):
-        return cache['age']
-    rows = cm_account_request('GET', '/rest/v1/chokomana_learner_settings', params={
-        'profile_id': 'eq.' + profile, 'select': 'age', 'limit': '1'})
+            and cache.get('day') == day and time.time() - cache['at'] < 120):
+        return cache
+    params = {'profile_id': 'eq.' + profile, 'select': 'age,minutes_per_year', 'limit': '1'}
+    can_set_time = True
+    try:
+        rows = cm_account_request('GET', CM_LEARNER_SETTINGS_TABLE, params=params)
+    except CMAPIError as exc:
+        if exc.provider_code not in ('42703', 'PGRST204'):
+            raise
+        rows = cm_account_request('GET', CM_LEARNER_SETTINGS_TABLE, params={**params, 'select': 'age'})
+        can_set_time = False
     if not isinstance(rows, list):
         raise RuntimeError('invalid settings response')
-    age = rows[0]['age'] if rows else None
-    st.session_state['cm_plan_settings'] = {'profile': profile, 'age': age, 'at': time.time(), 'day':now_jst().date().isoformat()}
-    return age
+    row = rows[0] if rows else {}
+    settings = {'profile': profile, 'age': row.get('age'), 'day': day, 'at': time.time(),
+                'minutes_per_year': row.get('minutes_per_year', CM_DEFAULT_MINUTES_PER_YEAR),
+                'can_set_time': can_set_time}
+    st.session_state['cm_plan_settings'] = settings
+    return settings
 
 
-def cm_save_plan_age(age):
-    if isinstance(age, bool) or not isinstance(age, int) or not 1 <= age <= 100:
+def cm_save_plan_time(age, minutes_per_year, *, can_set_time):
+    if type(age) is not int or not 1 <= age <= 100:
         raise ValueError('年齢は1〜100歳で入力してください。')
+    if type(minutes_per_year) is not int or minutes_per_year not in CM_MINUTES_PER_YEAR_OPTIONS:
+        raise ValueError('1歳あたりの時間は1〜30分から選んでください。')
     profile = st.session_state['cm_profile']
-    cm_account_request('POST', '/rest/v1/chokomana_learner_settings', {
-        'profile_id': profile, 'age': age, 'updated_at': datetime.now(timezone.utc).isoformat()},
-        {'on_conflict': 'profile_id'}, 'resolution=merge-duplicates,return=minimal')
-    st.session_state['cm_plan_settings'] = {'profile': profile, 'age': age, 'at': time.time(), 'day':now_jst().date().isoformat()}
-    st.session_state.pop('cm_plan_snapshot', None)
+    values = {'age': age}
+    if can_set_time:
+        values['minutes_per_year'] = minutes_per_year
+    rows = cm_account_request('POST', CM_LEARNER_SETTINGS_TABLE, {
+        'profile_id': profile, **values, 'updated_at': datetime.now(timezone.utc).isoformat()},
+        {'on_conflict': 'profile_id', 'select': ','.join(values)},
+        'resolution=merge-duplicates,return=representation')
+    if not isinstance(rows, list) or len(rows) != 1 or any(
+            rows[0].get(key) != value for key, value in values.items()):
+        raise RuntimeError('daily study time save could not be confirmed')
+    st.session_state['cm_plan_settings'] = {
+        'profile': profile, 'age': age, 'minutes_per_year': minutes_per_year,
+        'can_set_time': can_set_time, 'day': now_jst().date().isoformat(), 'at': time.time(),
+    }
+    for key in ('cm_plan_snapshot', 'cm_plan_refresh_backoff', 'cm_plan_retry_at', 'cm_receipt_plan'):
+        st.session_state.pop(key, None)
+
+
+def render_home_plan_time(settings):
+    saved_age, saved_minutes = settings['age'], settings['minutes_per_year']
+    can_set_time = settings['can_set_time']
+    open_key = 'cm_plan_time_open'
+    with st.container(key='cm_plan_time_editor'):
+        is_open = st.session_state.get(open_key, saved_age is None)
+        cm_button('学習時間の設定を閉じる' if is_open else '学習時間を設定',
+                  key='cm_plan_time_toggle',
+                  icon=':material/expand_less:' if is_open else ':material/expand_more:',
+                  on_click=st.session_state.__setitem__, args=(open_key, not is_open))
+        if not is_open:
+            return
+        age_col, minutes_col = st.columns(2, gap='small')
+        with age_col:
+            age = st.number_input('年齢（歳）', min_value=1, max_value=100, step=1,
+                                  value=saved_age, placeholder='年齢を入力', key='cm_plan_home_age')
+        with minutes_col:
+            minutes = st.selectbox('1歳あたりの時間', CM_MINUTES_PER_YEAR_OPTIONS,
+                                   index=CM_MINUTES_PER_YEAR_OPTIONS.index(saved_minutes),
+                                   format_func=lambda value: f'{value}分' + (
+                                       '（推奨）' if value == CM_DEFAULT_MINUTES_PER_YEAR else ''),
+                                   disabled=not can_set_time, key='cm_plan_home_minutes')
+        if age is not None:
+            st.caption(f'{age}歳 × {minutes}分 ＝ 1日の目安 {age * minutes}分')
+        if not can_set_time:
+            st.caption('1歳あたりの時間を変えるにはデータベースの更新が必要です。')
+        if not cm_button('保存', key='cm_plan_time_save', type='primary',
+                         disabled=age is None or (age, minutes) == (saved_age, saved_minutes)):
+            return
+        try:
+            cm_save_plan_time(age, minutes, can_set_time=can_set_time)
+        except ValueError as exc:
+            cm_error(str(exc))
+        except RuntimeError:
+            cm_error('学習時間を保存できませんでした。もう一度お試しください。')
+        else:
+            st.session_state[open_key] = False
+            st.toast('学習時間を保存しました。')
+            st.rerun()
 
 
 def cm_validate_subject_balance(values):
@@ -4410,50 +4479,6 @@ def render_subject_balance_editor(settings):
     st.caption('0％の教科と、出題できる単元がない教科は自動出題の対象外です。'
                '単元がない教科の時間は、配分がある他の教科で調整します。')
     return values
-
-
-def cm_step_plan_age(delta):
-    current = st.session_state.get('cm_plan_age_input')
-    st.session_state['cm_plan_age_input'] = max(1, min(100, (current if current is not None else 0) + delta))
-
-
-def render_plan_age():
-    try:
-        age = cm_plan_settings()
-    except RuntimeError:
-        cm_error('年齢の設定を読み込めませんでした。接続を確認して再試行してください。')
-        return
-    if 'cm_plan_age_input' not in st.session_state:
-        st.session_state['cm_plan_age_input'] = age
-    with st.container(border=True, key='cm_age_card'):
-        st.markdown('**1日の学習時間**')
-        st.markdown('年齢（歳）')
-        # Explicit step buttons also work when the numeric input has no value.
-        with st.container(key='cm_age_stepper'):
-            field, minus, plus = st.columns([8, 1, 1], gap='small')
-            with field:
-                chosen = st.number_input('年齢（歳）', min_value=1, max_value=100,
-                    value=None, step=1, placeholder='年齢を入れてね！', key='cm_plan_age_input',
-                    label_visibility='collapsed')
-            with minus:
-                cm_button('−', key='cm_plan_age_minus', help='年齢を1歳減らす',
-                          on_click=cm_step_plan_age, args=(-1,), use_container_width=True)
-            with plus:
-                cm_button('＋', key='cm_plan_age_plus', help='年齢を1歳増やす',
-                          on_click=cm_step_plan_age, args=(1,), use_container_width=True)
-        st.caption('1日の目安は年齢×10分。例：5歳なら50分です。')
-        save = cm_button('年齢を保存', key='cm_plan_age_save', type='primary', use_container_width=True)
-        if save:
-            if chosen is None:
-                cm_error('年齢を入れてね！')
-                return
-            try:
-                cm_save_plan_age(chosen)
-                st.rerun()
-            except ValueError as exc:
-                cm_error(str(exc))
-            except RuntimeError:
-                cm_error('保存できませんでした。もう一度お試しください。')
 
 
 def cm_plan_date(value):
@@ -5992,7 +6017,7 @@ def cm_refresh_saved_daily_plan(row, payload, profile, today):
     return latest['payload']
 
 
-def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozenset(), refresh=False):
+def cm_load_daily_plan(age, balance, allowed_sources, *, minutes_per_year, excluded_sources=frozenset(), refresh=False):
     from uuid import uuid4
 
     profile = st.session_state['cm_profile']
@@ -6009,6 +6034,9 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
         'planner_version': CM_PLANNER_VERSION, 'balance': balance, 'ready': sorted(ready),
         'age': age, 'graduation': cm_graduation_fingerprint(graduation_states),
         'excluded_sources': sorted(excluded_sources)}
+    # Preserve existing assignments saved before the default became configurable.
+    if minutes_per_year != CM_DEFAULT_MINUTES_PER_YEAR:
+        selection_context['minutes_per_year'] = minutes_per_year
     if previous and previous['payload'].get('selection_context') == selection_context:
         if not refresh:
             progress = cm_daily_progress(previous['payload'], profile, today)
@@ -6045,7 +6073,7 @@ def cm_load_daily_plan(age, balance, allowed_sources, *, excluded_sources=frozen
     extras = analysis.get('legacy_medal_ms_by_source', {})
     spent = cm_plan_subject_time(events, menus, profile, today, max(0, analysis['spent_ms']-sum(extras.values())))
     spent = {source: amount + extras.get(source, 0) for source, amount in spent.items()}
-    target = age * 10 * 60000
+    target = age * minutes_per_year * 60000
     remaining = max(0, target - analysis['spent_ms'])
     reached = analysis['spent_ms'] >= target * .95
     for menu in menus:
@@ -6288,7 +6316,7 @@ def cm_visible_plan_items(payload):
     return [item for item in payload.get('items', []) if item['source_app'] not in excluded]
 
 
-def cm_plan_display_fallback(profile, day, age, balance, excluded, ready_sources):
+def cm_plan_display_fallback(profile, day, age, balance, excluded, ready_sources, minutes_per_year):
     """Reuse a saved list only when its assignment settings still match."""
     try:
         row = cm_saved_daily_plan(profile, day)
@@ -6299,6 +6327,7 @@ def cm_plan_display_fallback(profile, day, age, balance, excluded, ready_sources
     payload = row['payload']
     context = payload.get('selection_context') or {}
     if (context.get('age') != age or context.get('balance') != balance
+            or payload.get('target_ms') != age * minutes_per_year * 60000
             or set(context.get('excluded_sources', [])) != excluded
             or set(context.get('ready', [])) != (ready_sources & CM_SOURCE_SUBJECT.keys())):
         return None
@@ -6318,15 +6347,23 @@ def render_daily_plan(apps, return_event=None):
         paused = st.session_state.get('cm_plan_refresh_backoff') == retry_scope
         automatic_paused = paused and not refresh and time.monotonic() < st.session_state.get('cm_plan_retry_at', 0)
         cached = st.session_state.get('cm_plan_snapshot')
+        if cached and len(cached['key']) == 6:
+            cached['key'] += (CM_DEFAULT_MINUTES_PER_YEAR,)
+        if automatic_paused:
+            learner_settings = st.session_state.get('cm_plan_settings')
+            if learner_settings and learner_settings['profile'] == profile:
+                render_home_plan_time(learner_settings)
         if automatic_paused and (not cached or cached['key'][:2] != (profile, day.isoformat())):
             st.caption('同期を休止しています。「更新」で再試行できます。')
             return
         if automatic_paused:
-            age = cached['key'][2]
+            age, minutes_per_year = cached['key'][2], cached['key'][6]
             balance, excluded = dict(cached['key'][3]), frozenset(cached['key'][5])
         else:
             try:
-                age = cm_plan_settings(refresh=refresh)
+                learner_settings = cm_plan_settings(refresh=refresh)
+                age, minutes_per_year = learner_settings['age'], learner_settings['minutes_per_year']
+                render_home_plan_time(learner_settings)
                 if age is not None:
                     settings = cm_plan_balance(refresh=refresh)
                     balance, excluded = settings['values'], settings['excluded']
@@ -6337,19 +6374,15 @@ def render_daily_plan(apps, return_event=None):
                 if not cached or cached['key'][:2] != (profile, day.isoformat()):
                     cm_error('学習設定を読み込めませんでした。「更新」で再試行できます。')
                     return
-                age = cached['key'][2]
+                age, minutes_per_year = cached['key'][2], cached['key'][6]
                 balance, excluded = dict(cached['key'][3]), frozenset(cached['key'][5])
                 automatic_paused = True
         if age is None:
             st.info('年齢を設定すると、今日やる学習を自動で選びます。')
-            if manager_url := cm_mimamori_url():
-                st.link_button('保護者の設定を開く', manager_url)
-            else:
-                render_plan_age()
             return
         ready_sources={a['id'] for a in apps if a['ready']}
         cache_key = (profile, day.isoformat(), age,
-                     tuple(balance.items()), tuple(sorted(ready_sources)), tuple(sorted(excluded)))
+                     tuple(balance.items()), tuple(sorted(ready_sources)), tuple(sorted(excluded)), minutes_per_year)
         cache_matches = cached is not None and cached['key'] == cache_key
         if automatic_paused and not cache_matches:
             st.caption('同期を休止しています。「更新」で再試行できます。')
@@ -6359,7 +6392,8 @@ def render_daily_plan(apps, return_event=None):
                 feedback = (st.spinner('達成状況を更新しています…') if refresh or return_event
                             else nullcontext() if cache_matches else st.spinner('今日のリストを読み込んでいます…'))
                 with feedback:
-                    payload = cm_load_daily_plan(age, balance, ready_sources, excluded_sources=excluded, refresh=refresh)
+                    payload = cm_load_daily_plan(age, balance, ready_sources, minutes_per_year=minutes_per_year,
+                                                 excluded_sources=excluded, refresh=refresh)
                 cached = {'key':cache_key,'at':time.time(),'payload':payload}
                 st.session_state['cm_plan_snapshot']=cached
                 st.session_state.pop('cm_plan_refresh_backoff', None)
@@ -6374,7 +6408,8 @@ def render_daily_plan(apps, return_event=None):
                 if not cache_matches:
                     payload = None
                     if not (isinstance(exc, CMAPIError) and exc.retryable):
-                        payload = cm_plan_display_fallback(profile, day, age, balance, excluded, ready_sources)
+                        payload = cm_plan_display_fallback(profile, day, age, balance, excluded, ready_sources,
+                                                           minutes_per_year)
                     if payload is None:
                         cm_error('今日のリストを読み込めませんでした。「更新」で再試行してください。')
                         return
@@ -6389,7 +6424,7 @@ def render_daily_plan(apps, return_event=None):
         visible_items = cm_visible_plan_items(p)
         completed = sum(bool(item['done']) for item in visible_items)
         pending_count = len(visible_items) - completed
-        summary=f'<p class="cm-plan-summary">{age}歳 · 目安{age*10}分 <span>学習済み {cm_minutes(p["spent_ms"])}分</span></p>'
+        summary=f'<p class="cm-plan-summary">{age}歳 · 目安{cm_minutes(p["target_ms"])}分 <span>学習済み {cm_minutes(p["spent_ms"])}分</span></p>'
         if visible_items:
             progress = f'達成 {completed}／{len(visible_items)}件'
             if pending_count:
@@ -6428,7 +6463,7 @@ def render_daily_plan(apps, return_event=None):
             st.write('教科の中では、初回の正答やメダルの傾向から、習得した分野は次の単元へ進み、'
                      'つまずいた分野は同じ単元の練習と復習を優先します。学習が同期されると、該当する課題の達成状況を更新します。')
             st.write('復習間隔は正答が続くと1→3→7→14→30日へ延ばし、つまずくと翌日に戻します。効果を保証する日数ではなく、成績に応じて調整する初期設定です。')
-            st.write('1日の目安は年齢×10分です。休憩は学習時間に含めません。'
+            st.write('1日の目安は、年齢に「学習時間を設定」で選んだ1歳あたりの時間を掛けたものです。休憩は学習時間に含めません。'
                      '同じ単元は1日3回を目安にします。配分を変更しても、完了済み・進行中の課題は残ります。')
             st.write('「学習しない」にした分類はここに表示されません。学んだ記録は残ります。')
             st.write('所要時間は保証値ではありません。国語・ことばは同じ単元・級の完了記録を優先し、完了記録がない場合は初回解答3問以上から推定します。ほかの教科は同じ条件の完了記録が3回以上そろうと直近10回までの実測中央値を使い、それまでは仮の目安を表示します。')
@@ -6777,7 +6812,7 @@ parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',heig
 for _cm_trace_name in (
     'cm_api_request', 'fetch_day', 'cm_prepare_launch_links', '_make_launch_link',
     'cm_load_daily_plan', 'cm_daily_progress', 'cm_refresh_saved_daily_plan', 'cm_support_prefetch', 'cm_plan_analyze', 'cm_build_daily_plan',
-    'cm_restore_account', 'cm_login_account', 'cm_register_account', 'cm_change_password', 'cm_save_plan_age'):
+    'cm_restore_account', 'cm_login_account', 'cm_register_account', 'cm_change_password', 'cm_save_plan_time'):
     globals()[_cm_trace_name] = cm_diag_trace(_cm_trace_name)(globals()[_cm_trace_name])
 main = cm_diag_run(main)
 
