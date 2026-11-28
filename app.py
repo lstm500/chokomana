@@ -3144,7 +3144,7 @@ def _day_transition() -> None:
 def main() -> None:
     st.set_page_config(page_title="ちょこまな | まなびのホーム", page_icon="📚",
                        layout="wide", initial_sidebar_state="collapsed")
-    st.markdown(STYLES, unsafe_allow_html=True)
+    st.markdown(STYLES + CM_PLAN_TIME_STYLE, unsafe_allow_html=True)
     st.markdown(CM_TRAIN_STYLE, unsafe_allow_html=True)
     st.markdown('<style>.cm-notice-highlight{outline:3px solid #edba4c!important;outline-offset:4px;scroll-margin-top:80px}.st-key-cm_receipt_notice button{color:#c42032!important;font-weight:800!important;border-color:#e7a5ab!important;background:#fff4f4!important}.cm-plan-item .cm-support-strip{gap:4px;margin:4px 0}.cm-plan-item .cm-support{max-width:100%;font-size:11px;padding:3px 5px;overflow-wrap:anywhere}.cm-plan-item .cm-support b{font-size:19px}</style>',unsafe_allow_html=True)
     if "cm_page" not in st.session_state:
@@ -4255,34 +4255,49 @@ def cm_save_plan_time(age, minutes_per_year, *, can_set_time):
         st.session_state.pop(key, None)
 
 
+CM_PLAN_TIME_STYLE = """
+<style>
+.stApp .st-key-cm_plan_time_editor{max-width:420px}
+.stApp .st-key-cm_plan_time_editor [data-testid="stHorizontalBlock"]{
+    display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr) max-content;
+    align-items:end;gap:8px!important
+}
+.stApp .st-key-cm_plan_time_editor [data-testid="stColumn"]{
+    width:100%!important;min-width:0!important
+}
+.stApp .st-key-cm_plan_time_save button{padding-inline:10px;white-space:nowrap}
+@media(max-width:440px){
+    .stApp .st-key-cm_plan_time_editor [data-testid="stNumberInput"] button{
+        width:24px;min-width:24px;padding:0
+    }
+    .stApp .st-key-cm_plan_time_editor [data-testid="stNumberInput"] input{padding-inline:6px}
+}
+</style>
+"""
+
+
 def render_home_plan_time(settings):
     saved_age, saved_minutes = settings['age'], settings['minutes_per_year']
     can_set_time = settings['can_set_time']
-    open_key = 'cm_plan_time_open'
     with st.container(key='cm_plan_time_editor'):
-        is_open = st.session_state.get(open_key, saved_age is None)
-        cm_button('学習時間の設定を閉じる' if is_open else '学習時間を設定',
-                  key='cm_plan_time_toggle',
-                  icon=':material/expand_less:' if is_open else ':material/expand_more:',
-                  on_click=st.session_state.__setitem__, args=(open_key, not is_open))
-        if not is_open:
-            return
-        age_col, minutes_col = st.columns(2, gap='small')
+        age_col, minutes_col, save_col = st.columns([1, 1.1, 0.55], gap='small', vertical_alignment='bottom')
         with age_col:
             age = st.number_input('年齢（歳）', min_value=1, max_value=100, step=1,
-                                  value=saved_age, placeholder='年齢を入力', key='cm_plan_home_age')
+                                  value=saved_age, placeholder='入力', key='cm_plan_home_age')
         with minutes_col:
-            minutes = st.selectbox('1歳あたりの時間', CM_MINUTES_PER_YEAR_OPTIONS,
+            minutes = st.selectbox('掛け目（分／歳）', CM_MINUTES_PER_YEAR_OPTIONS,
                                    index=CM_MINUTES_PER_YEAR_OPTIONS.index(saved_minutes),
-                                   format_func=lambda value: f'{value}分' + (
-                                       '（推奨）' if value == CM_DEFAULT_MINUTES_PER_YEAR else ''),
+                                   format_func=lambda value: f'{value}分',
                                    disabled=not can_set_time, key='cm_plan_home_minutes')
-        if age is not None:
+        changed = (age, minutes) != (saved_age, saved_minutes)
+        with save_col:
+            submitted = cm_button('保存', key='cm_plan_time_save', type='primary',
+                                  disabled=age is None or not changed)
+        if age is not None and changed:
             st.caption(f'{age}歳 × {minutes}分 ＝ 1日の目安 {age * minutes}分')
         if not can_set_time:
             st.caption('1歳あたりの時間を変えるにはデータベースの更新が必要です。')
-        if not cm_button('保存', key='cm_plan_time_save', type='primary',
-                         disabled=age is None or (age, minutes) == (saved_age, saved_minutes)):
+        if not submitted:
             return
         try:
             cm_save_plan_time(age, minutes, can_set_time=can_set_time)
@@ -4291,7 +4306,6 @@ def render_home_plan_time(settings):
         except RuntimeError:
             cm_error('学習時間を保存できませんでした。もう一度お試しください。')
         else:
-            st.session_state[open_key] = False
             st.toast('学習時間を保存しました。')
             st.rerun()
 
@@ -6463,7 +6477,7 @@ def render_daily_plan(apps, return_event=None):
             st.write('教科の中では、初回の正答やメダルの傾向から、習得した分野は次の単元へ進み、'
                      'つまずいた分野は同じ単元の練習と復習を優先します。学習が同期されると、該当する課題の達成状況を更新します。')
             st.write('復習間隔は正答が続くと1→3→7→14→30日へ延ばし、つまずくと翌日に戻します。効果を保証する日数ではなく、成績に応じて調整する初期設定です。')
-            st.write('1日の目安は、年齢に「学習時間を設定」で選んだ1歳あたりの時間を掛けたものです。休憩は学習時間に含めません。'
+            st.write('1日の目安は年齢×掛け目です。推奨の掛け目は1歳あたり10分です。休憩は学習時間に含めません。'
                      '同じ単元は1日3回を目安にします。配分を変更しても、完了済み・進行中の課題は残ります。')
             st.write('「学習しない」にした分類はここに表示されません。学んだ記録は残ります。')
             st.write('所要時間は保証値ではありません。国語・ことばは同じ単元・級の完了記録を優先し、完了記録がない場合は初回解答3問以上から推定します。ほかの教科は同じ条件の完了記録が3回以上そろうと直近10回までの実測中央値を使い、それまでは仮の目安を表示します。')
